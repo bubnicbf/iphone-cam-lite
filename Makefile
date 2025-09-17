@@ -9,8 +9,8 @@ setup:
 	chmod +x scripts/*.sh
 	./scripts/check_prereqs.sh
 
-zoom:
-	./scripts/start_zoom.sh
+# zoom:
+# 	./scripts/start_zoom.sh
 
 teams:
 	./scripts/start_teams.sh
