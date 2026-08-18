@@ -20,3 +20,4 @@ reset-camera:
 
 test:
 	./scripts/test_makefile.sh
+	./scripts/test_executable_permissions.sh
