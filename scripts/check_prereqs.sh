@@ -46,7 +46,7 @@ esac
 if ifconfig en0 2>/dev/null | grep -q 'status: active' || ifconfig en1 2>/dev/null | grep -q 'status: active'; then
   echo "✓ Wi-Fi connected"
 else
-  echo "✖ Wi-Fi not active. Connect to Wi-Fi."
+  echo "✖ Could not identify the Wi-Fi hardware interface (networksetup unavailable or no Wi-Fi/AirPort port found)."
   ok=false
 fi
 

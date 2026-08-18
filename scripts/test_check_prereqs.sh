@@ -70,10 +70,62 @@ MOCKEOF
   chmod +x "$mock_dir/$name"
 }
 
+# write_networksetup_mock <filename> <hardware-ports-listing-text>
+# Creates a mock at $mock_dir/<filename> that prints the given text when
+# invoked as "<filename> -listallhardwareports", mimicking the real
+# `networksetup -listallhardwareports` output format.
+write_networksetup_mock() {
+  local name="$1" ports_text="$2"
+  local data_file="$mock_dir/${name}.ports"
+  printf '%s\n' "$ports_text" > "$data_file"
+  cat > "$mock_dir/$name" << MOCKEOF
+#!/usr/bin/env bash
+if [[ "\$1" == "-listallhardwareports" ]]; then
+  cat "$data_file"
+  exit 0
+fi
+exit 1
+MOCKEOF
+  chmod +x "$mock_dir/$name"
+}
+
+# write_failing_networksetup_mock <filename>
+# Creates a mock that always fails, simulating networksetup being broken
+# or unavailable.
+write_failing_networksetup_mock() {
+  local name="$1"
+  cat > "$mock_dir/$name" << 'MOCKEOF'
+#!/usr/bin/env bash
+exit 1
+MOCKEOF
+  chmod +x "$mock_dir/$name"
+}
+
+# write_ifconfig_mock <active-device> [<active-device> ...]
+# Creates the "ifconfig" mock (must be named exactly "ifconfig" since it is
+# resolved via PATH). Reports "status: active" only for the listed
+# device(s), and logs every device it was queried with to $IFCONFIG_LOG (if
+# set) so tests can verify which interface the implementation inspected.
+write_ifconfig_mock() {
+  local data_file="$mock_dir/ifconfig.active"
+  printf '%s\n' "$@" > "$data_file"
+  cat > "$mock_dir/ifconfig" << MOCKEOF
+#!/usr/bin/env bash
+if [[ -n "\${IFCONFIG_LOG:-}" ]]; then
+  echo "\$1" >> "\$IFCONFIG_LOG"
+fi
+if grep -qxF "\$1" "$data_file" 2>/dev/null; then
+  echo "status: active"
+fi
+MOCKEOF
+  chmod +x "$mock_dir/ifconfig"
+}
+
 run_prereqs() {
   # Runs check_prereqs.sh with the mock directory first in PATH. Uses
   # 'bash <script>' rather than direct execution so this test does not
-  # depend on the script's filesystem executable bit.
+  # depend on the script's filesystem executable bit. NETWORKSETUP_BIN is
+  # expected to already be exported by the caller.
   PATH="$mock_dir:$PATH" bash "$prereq_script"
 }
 
@@ -121,7 +173,7 @@ set -e
 echo "$output"
 
 if [[ $status -ne 0 ]]; then
-  fail "expected check_prereqs.sh to exit 0 on the success scenario, got $status"
+  fail "expected check_prereqs.sh to exit 0 when the dynamically discovered Wi-Fi device (en7) is active, got $status"
 fi
 
 assert_contains "$output" "✓ Bluetooth on" "the Bluetooth success result"
@@ -131,26 +183,139 @@ assert_contains "$output" "Wi-Fi connected" "the Wi-Fi connected result"
 assert_contains "$output" "Accessibility permissions" "the Accessibility permission reminder"
 assert_contains "$output" "All checks passed" "the final all-checks-passed result"
 
-echo "PASS: success scenario exited 0 with the full expected output"
+ifconfig_calls="$(cat "$IFCONFIG_LOG" 2>/dev/null || true)"
+assert_contains "$ifconfig_calls" "en7" "an ifconfig call for the dynamically discovered device en7"
+if [[ "$ifconfig_calls" == *"en0"* || "$ifconfig_calls" == *"en1"* ]]; then
+  fail "check_prereqs.sh queried en0/en1 via ifconfig even though Wi-Fi is on en7 -- unexplained hard-coded fallback detected: [$ifconfig_calls]"
+fi
 
-# --- Scenario 2: Wi-Fi unavailable -------------------------------------
+echo "PASS: dynamic discovery found en7, queried only en7 via ifconfig, and the success scenario passed"
+
+# --- Scenario: an active but unrelated en0 must not be a false positive --
 echo
-echo "== Scenario: Wi-Fi unavailable =="
+echo "== Scenario: an active but unrelated en0 must not produce a false positive =="
 
-write_mock ifconfig '
-# No interface reports an active status.
-exit 0
-'
+: > "$IFCONFIG_LOG"
+write_ifconfig_mock en0
+write_networksetup_mock networksetup_falsepos "$(cat << 'PORTS'
+Hardware Port: Ethernet
+Device: en0
+Ethernet Address: aa:aa:aa:aa:aa:aa
+
+Hardware Port: Wi-Fi
+Device: en5
+Ethernet Address: dd:dd:dd:dd:dd:dd
+PORTS
+)"
+export NETWORKSETUP_BIN="$mock_dir/networksetup_falsepos"
 
 set +e
-fail_output="$(run_prereqs 2>&1)"
-fail_status=$?
+fp_output="$(run_prereqs 2>&1)"
+fp_status=$?
 set -e
 
-echo "$fail_output"
+echo "$fp_output"
 
-if [[ $fail_status -eq 0 ]]; then
-  fail "expected check_prereqs.sh to exit nonzero when Wi-Fi is unavailable, got 0"
+if [[ $fp_status -eq 0 ]]; then
+  fail "expected check_prereqs.sh to exit nonzero when the real Wi-Fi device (en5) is inactive, even though unrelated en0 is active, got 0"
+fi
+
+assert_contains "$fp_output" "Wi-Fi not active" "the Wi-Fi failure message (false-positive-prevention scenario)"
+assert_contains "$fp_output" "en5" "the actual Wi-Fi device name (en5) in the failure message"
+assert_contains "$fp_output" "Accessibility permissions" "the Accessibility permission reminder (false-positive-prevention scenario)"
+assert_contains "$fp_output" "Prereq checks found issues" "the prerequisite-failure summary (false-positive-prevention scenario)"
+
+fp_calls="$(cat "$IFCONFIG_LOG" 2>/dev/null || true)"
+assert_contains "$fp_calls" "en5" "an ifconfig call for the real Wi-Fi device en5"
+
+echo "PASS: an active but unrelated en0 interface did not produce a false Wi-Fi-connected result"
+
+# --- Scenario: Wi-Fi device cannot be discovered (networksetup failure) --
+echo
+echo "== Scenario: Wi-Fi device cannot be discovered (networksetup failure) =="
+
+write_failing_networksetup_mock networksetup_broken
+export NETWORKSETUP_BIN="$mock_dir/networksetup_broken"
+: > "$IFCONFIG_LOG"
+write_ifconfig_mock en0
+
+set +e
+df_output="$(run_prereqs 2>&1)"
+df_status=$?
+set -e
+
+echo "$df_output"
+
+if [[ $df_status -eq 0 ]]; then
+  fail "expected check_prereqs.sh to exit nonzero when networksetup fails, got 0"
+fi
+
+assert_contains "$df_output" "Could not identify the Wi-Fi hardware interface" "a clear Wi-Fi discovery failure message"
+assert_contains "$df_output" "Accessibility permissions" "the Accessibility permission reminder (discovery-failure scenario)"
+assert_contains "$df_output" "Prereq checks found issues" "the prerequisite-failure summary (discovery-failure scenario)"
+
+echo "PASS: a networksetup failure produced a clear discovery-failure message and did not exit silently"
+
+# --- Scenario: networksetup succeeds but lists no Wi-Fi/AirPort port -----
+echo
+echo "== Scenario: networksetup succeeds but reports no Wi-Fi/AirPort hardware port =="
+
+write_networksetup_mock networksetup_noport "$(cat << 'PORTS'
+Hardware Port: Ethernet
+Device: en0
+Ethernet Address: aa:aa:aa:aa:aa:aa
+
+Hardware Port: Bluetooth PAN
+Device: en3
+Ethernet Address: ee:ee:ee:ee:ee:ee
+PORTS
+)"
+export NETWORKSETUP_BIN="$mock_dir/networksetup_noport"
+
+set +e
+np_output="$(run_prereqs 2>&1)"
+np_status=$?
+set -e
+
+echo "$np_output"
+
+if [[ $np_status -eq 0 ]]; then
+  fail "expected check_prereqs.sh to exit nonzero when no Wi-Fi/AirPort hardware port is listed, got 0"
+fi
+
+assert_contains "$np_output" "Could not identify the Wi-Fi hardware interface" "a clear Wi-Fi discovery failure message (no matching port)"
+assert_contains "$np_output" "Accessibility permissions" "the Accessibility permission reminder (no-port scenario)"
+assert_contains "$np_output" "Prereq checks found issues" "the prerequisite-failure summary (no-port scenario)"
+
+echo "PASS: a hardware-port listing with no Wi-Fi/AirPort entry produced a clear discovery-failure message"
+
+# --- Scenario: older "AirPort" hardware-port label is recognized ---------
+echo
+echo "== Scenario: older 'AirPort' hardware-port label is recognized =="
+
+write_networksetup_mock networksetup_airport "$(cat << 'PORTS'
+Hardware Port: Ethernet
+Device: en0
+Ethernet Address: aa:aa:aa:aa:aa:aa
+
+Hardware Port: AirPort
+Device: en2
+Ethernet Address: ff:ff:ff:ff:ff:ff
+PORTS
+)"
+export NETWORKSETUP_BIN="$mock_dir/networksetup_airport"
+: > "$IFCONFIG_LOG"
+write_ifconfig_mock en2
+
+set +e
+ap_output="$(run_prereqs 2>&1)"
+ap_status=$?
+set -e
+
+echo "$ap_output"
+
+if [[ $ap_status -ne 0 ]]; then
+  fail "expected check_prereqs.sh to exit 0 when the 'AirPort'-labeled device (en2) is active, got $ap_status"
 fi
 
 assert_contains "$fail_output" "✓ Bluetooth on" "the Bluetooth success result (failure scenario)"
@@ -158,7 +323,7 @@ assert_contains "$fail_output" "Wi-Fi not active" "the Wi-Fi failure message"
 assert_contains "$fail_output" "Accessibility permissions" "the Accessibility permission reminder (failure scenario)"
 assert_contains "$fail_output" "Prereq checks found issues" "the prerequisite-failure summary"
 
-echo "PASS: failure scenario continued past Bluetooth, reported Wi-Fi failure, and exited nonzero"
+echo "PASS: the older 'AirPort' hardware-port label is recognized and its device is checked"
 
 # Restore a Wi-Fi-active mock for the remaining Bluetooth-focused scenarios.
 write_mock ifconfig '
