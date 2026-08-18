@@ -1,9 +1,6 @@
-
-## Makefile
-```make
 SHELL := /bin/bash
 
-.PHONY: setup zoom teams keepawake reset-camera
+.PHONY: setup zoom teams keepawake reset-camera test
 
 setup:
 	chmod +x scripts/*.sh
@@ -20,3 +17,6 @@ keepawake:
 
 reset-camera:
 	./scripts/reset_camera_services.sh
+
+test:
+	./scripts/test_makefile.sh
