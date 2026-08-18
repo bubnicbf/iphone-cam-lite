@@ -4,6 +4,24 @@ set -euo pipefail
 APP_NAME="Zoom"
 APP_MATCH="zoom.us"
 
+# Exact executable process name(s) that count as "Zoom is actually
+# running". Matched with `pgrep -x` (exact executable-name match) only --
+# never `pgrep -f` (full command-line substring match), which can match
+# any unrelated process whose arguments merely happen to contain the app
+# name (a shell command, a log line, a test process, an editor buffer,
+# etc.) and would falsely report Zoom as started.
+#
+# "zoom.us" is Zoom's documented main GUI process/executable name on
+# macOS (it is also the identifier Zoom's own installer registers with
+# Launch Services, which is why `open -ga "zoom.us"` above already works),
+# distinct from helper processes such as "CptHost" or "ZoomOpener". This
+# environment has no real macOS install to read the app bundle's
+# CFBundleExecutable value directly, so this name is taken from Zoom's
+# published process-name documentation rather than live-verified bundle
+# metadata; update it here if a future Zoom build ships under a different
+# executable name.
+ZOOM_PROCESS_NAMES=("zoom.us")
+
 # Configurable so automated tests can use a small attempt limit and
 # zero-length delays. Defaults preserve the existing production timing.
 LAUNCHER_ATTEMPTS="${LAUNCHER_ATTEMPTS:-20}"
@@ -21,13 +39,28 @@ if ! open -ga "$APP_MATCH"; then
   exit 1
 fi
 
+# process_running checks every exact candidate executable name in turn and
+# reports success if any of them is currently running. Checking multiple
+# candidates here always counts as a single polling attempt in the caller's
+# loop below -- it never consumes more than one iteration of $attempts no
+# matter how many names are in the candidate list.
+process_running() {
+  local name
+  for name in "$@"; do
+    if pgrep -x "$name" >/dev/null; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Wait for Zoom to spin up (meeting or main window). "found" tracks whether
 # the process actually appeared, so a loop that ends because the attempt
 # limit was reached is never confused with a successful launch.
 found=false
 attempts=0
 while [[ "$attempts" -lt "$LAUNCHER_ATTEMPTS" ]]; do
-  if pgrep -f "$APP_MATCH" >/dev/null; then
+  if process_running "${ZOOM_PROCESS_NAMES[@]}"; then
     found=true
     break
   fi

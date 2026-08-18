@@ -55,6 +55,43 @@ exit 0
 # a configurable number of times before succeeding (or never succeed).
 write_mock pgrep '
 echo "$*" >> "${PGREP_LOG:-/dev/null}"
+
+# Exact-matching-aware mode (opt in with PGREP_MODE=exact), used by the
+# process-matching regression scenarios further down this file. It is
+# args-aware: it distinguishes a broad "-f" (full command-line) search
+# from an exact "-x" (executable-name) search, so tests can prove the
+# launcher only ever performs the latter. When PGREP_MODE is unset it
+# falls through to the original argument-agnostic counter behavior below,
+# which the failure/timeout/success/invalid-attempts scenarios above rely
+# on unchanged.
+if [[ "${PGREP_MODE:-counter}" == "exact" ]]; then
+  opt="${1:-}"
+  name="${2:-}"
+  if [[ "$opt" == "-f" ]]; then
+    # Simulates an unrelated process whose full command line happens to
+    # contain the app name -- only ever "matches" if a caller explicitly
+    # asks this mock to simulate that broad, false-positive-prone search.
+    if [[ "${PGREP_F_SUCCEEDS:-0}" == "1" ]]; then
+      exit 0
+    fi
+    exit 1
+  fi
+  if [[ "$opt" == "-x" ]]; then
+    counter_file="${PGREP_COUNTER_FILE:?PGREP_COUNTER_FILE must be set}"
+    count=0
+    [[ -f "$counter_file" ]] && count="$(cat "$counter_file")"
+    count=$((count+1))
+    echo "$count" > "$counter_file"
+    if [[ "$name" == "${PGREP_EXACT_MATCH_NAME:-__no_match__}" ]] \
+      && [[ "$count" -ge "${PGREP_EXACT_SUCCEED_AFTER:-999999}" ]]; then
+      exit 0
+    fi
+    exit 1
+  fi
+  # Any other invocation shape is never treated as a match.
+  exit 1
+fi
+
 counter_file="${PGREP_COUNTER_FILE:?PGREP_COUNTER_FILE must be set}"
 count=0
 [[ -f "$counter_file" ]] && count="$(cat "$counter_file")"
@@ -283,6 +320,141 @@ test_launcher() {
 
 test_launcher "Zoom" "scripts/start_zoom.sh" "scripts/select_zoom_camera.scpt"
 test_launcher "Microsoft Teams" "scripts/start_teams.sh" "scripts/select_teams_camera.scpt"
+
+# test_exact_process_matching covers the exact-executable-name matching
+# fix: it proves the launcher can no longer be fooled by an unrelated
+# process whose full command line merely contains the app name (the
+# historical `pgrep -f` false-positive bug), and that it correctly
+# recognizes only its real, exact application executable.
+test_exact_process_matching() {
+  local launcher_name="$1" script_rel="$2" selector_rel="$3" exact_name="$4"
+  local script_path="$repo_root/$script_rel"
+
+  if [[ ! -f "$script_path" ]]; then
+    fail "$script_rel not found at $script_path"
+  fi
+
+  local scenario_dir open_log pgrep_log pgrep_counter sleep_log osascript_log
+  local out_file err_file status out_content err_content
+
+  # --- Scenario: unrelated command line is not mistaken for the app ------
+  echo
+  echo "== [$launcher_name] Scenario: unrelated command line contains the app name (pgrep -f false positive) =="
+  scenario_dir="$mock_dir/$(echo "$launcher_name" | tr ' ' '_')_unrelated_cmdline"
+  mkdir -p "$scenario_dir"
+  open_log="$scenario_dir/open.log"; : > "$open_log"
+  pgrep_log="$scenario_dir/pgrep.log"; : > "$pgrep_log"
+  pgrep_counter="$scenario_dir/pgrep.count"
+  sleep_log="$scenario_dir/sleep.log"; : > "$sleep_log"
+  osascript_log="$scenario_dir/osascript.log"; : > "$osascript_log"
+  out_file="$scenario_dir/stdout.log"
+  err_file="$scenario_dir/stderr.log"
+
+  set +e
+  OPEN_LOG="$open_log" OPEN_SHOULD_FAIL=0 \
+    PGREP_LOG="$pgrep_log" PGREP_MODE=exact PGREP_F_SUCCEEDS=1 \
+    PGREP_COUNTER_FILE="$pgrep_counter" PGREP_EXACT_MATCH_NAME="$exact_name" PGREP_EXACT_SUCCEED_AFTER=999999 \
+    SLEEP_LOG="$sleep_log" OSASCRIPT_LOG="$osascript_log" \
+    LAUNCHER_ATTEMPTS=3 LAUNCHER_POLL_INTERVAL=0 LAUNCHER_SETTLE_DELAY=0 \
+    run_launcher "$script_path" "$out_file" "$err_file"
+  status=$?
+  set -e
+
+  out_content="$(cat "$out_file")"; err_content="$(cat "$err_file")"
+  echo "stdout: $out_content"
+  echo "stderr: $err_content"
+  echo "pgrep calls: $(cat "$pgrep_log")"
+
+  if [[ $status -eq 0 ]]; then
+    fail "[$launcher_name / unrelated-cmdline] expected nonzero exit when only an unrelated command line contains the app name, got 0"
+  fi
+  assert_contains "$err_content" "did not start" "a startup-timeout message" "$launcher_name / unrelated-cmdline (stderr)"
+  if [[ -s "$osascript_log" ]]; then
+    fail "[$launcher_name / unrelated-cmdline] the selector was invoked even though the real application never started: $(cat "$osascript_log")"
+  fi
+  if [[ "$(count_lines "$sleep_log")" -ne 3 ]]; then
+    fail "[$launcher_name / unrelated-cmdline] expected exactly 3 polling sleeps and no settling-delay sleep, got $(count_lines "$sleep_log"): $(cat "$sleep_log")"
+  fi
+  if grep -q -- '-f' "$pgrep_log"; then
+    fail "[$launcher_name / unrelated-cmdline] a pgrep call used -f (broad command-line search): $(cat "$pgrep_log")"
+  fi
+  echo "PASS: [$launcher_name] an unrelated process whose command line contains the app name is not mistaken for the real application, and the selector is never invoked"
+
+  # --- Scenario: exact application executable is recognized --------------
+  echo
+  echo "== [$launcher_name] Scenario: exact application executable ($exact_name) is recognized =="
+  scenario_dir="$mock_dir/$(echo "$launcher_name" | tr ' ' '_')_exact_match"
+  mkdir -p "$scenario_dir"
+  open_log="$scenario_dir/open.log"; : > "$open_log"
+  pgrep_log="$scenario_dir/pgrep.log"; : > "$pgrep_log"
+  pgrep_counter="$scenario_dir/pgrep.count"
+  sleep_log="$scenario_dir/sleep.log"; : > "$sleep_log"
+  osascript_log="$scenario_dir/osascript.log"; : > "$osascript_log"
+  out_file="$scenario_dir/stdout.log"
+  err_file="$scenario_dir/stderr.log"
+
+  set +e
+  OPEN_LOG="$open_log" OPEN_SHOULD_FAIL=0 \
+    PGREP_LOG="$pgrep_log" PGREP_MODE=exact PGREP_F_SUCCEEDS=0 \
+    PGREP_COUNTER_FILE="$pgrep_counter" PGREP_EXACT_MATCH_NAME="$exact_name" PGREP_EXACT_SUCCEED_AFTER=3 \
+    SLEEP_LOG="$sleep_log" OSASCRIPT_LOG="$osascript_log" \
+    LAUNCHER_ATTEMPTS=10 LAUNCHER_POLL_INTERVAL=0 LAUNCHER_SETTLE_DELAY=0 \
+    run_launcher "$script_path" "$out_file" "$err_file"
+  status=$?
+  set -e
+
+  out_content="$(cat "$out_file")"; err_content="$(cat "$err_file")"
+  echo "stdout: $out_content"
+  echo "stderr: $err_content"
+  echo "pgrep calls: $(cat "$pgrep_log")"
+
+  if [[ $status -ne 0 ]]; then
+    fail "[$launcher_name / exact-match] expected exit 0 once the exact executable is found, got $status (stderr: $err_content)"
+  fi
+  if [[ "$(count_lines "$pgrep_log")" -ne 3 ]]; then
+    fail "[$launcher_name / exact-match] expected polling to stop as soon as the exact executable was found (3 pgrep calls), got $(count_lines "$pgrep_log")"
+  fi
+  if [[ "$(count_lines "$osascript_log")" -ne 1 ]]; then
+    fail "[$launcher_name / exact-match] expected osascript to be invoked exactly once, got $(count_lines "$osascript_log")"
+  fi
+  assert_contains "$(cat "$osascript_log")" "$selector_rel" "the correct AppleScript selector" "$launcher_name / exact-match"
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    if [[ "$line" != "-x $exact_name" ]]; then
+      fail "[$launcher_name / exact-match] expected every pgrep call to be exactly '-x $exact_name' (never a helper name, substring, or -f search), but saw: $line"
+    fi
+  done < "$pgrep_log"
+  echo "PASS: [$launcher_name] the exact application executable ($exact_name) is recognized, polling stops immediately, and $selector_rel is invoked exactly once; no helper, substring, or broad-search name ever satisfies the check"
+}
+
+test_exact_process_matching "Zoom" "scripts/start_zoom.sh" "scripts/select_zoom_camera.scpt" "zoom.us"
+test_exact_process_matching "Microsoft Teams" "scripts/start_teams.sh" "scripts/select_teams_camera.scpt" "MSTeams"
+
+# --- Static assertions: production launchers never use broad pgrep -f ----
+echo
+echo "== Static checks: production launchers use only exact pgrep matching =="
+for launcher_script in "scripts/start_zoom.sh" "scripts/start_teams.sh"; do
+  launcher_path="$repo_root/$launcher_script"
+  # Only inspect actual code, not comment lines that merely discuss the
+  # historical "pgrep -f" bug in prose.
+  code_only="$(grep -v -E '^[[:space:]]*#' "$launcher_path")"
+  if echo "$code_only" | grep -q -- 'pgrep -f'; then
+    fail "[static / $launcher_script] found a live pgrep invocation using -f: $(echo "$code_only" | grep -- 'pgrep -f')"
+  fi
+  if ! echo "$code_only" | grep -q -- 'pgrep -x'; then
+    fail "[static / $launcher_script] expected at least one 'pgrep -x' (exact match) invocation, found none"
+  fi
+done
+if ! grep -q '"zoom.us"' "$repo_root/scripts/start_zoom.sh"; then
+  fail "[static / start_zoom.sh] expected the exact executable name \"zoom.us\" to appear in the script"
+fi
+if ! grep -q '"MSTeams"' "$repo_root/scripts/start_teams.sh"; then
+  fail "[static / start_teams.sh] expected the exact executable name \"MSTeams\" to appear in the script"
+fi
+if grep -q 'pgrep -x "\$APP_NAME"' "$repo_root/scripts/start_teams.sh"; then
+  fail "[static / start_teams.sh] the display name \$APP_NAME (\"Microsoft Teams\") must not be used as the exact process-match pattern -- it is not the real executable name"
+fi
+echo "PASS: [static] no production launcher contains pgrep -f, both use pgrep -x with their documented exact executable names, and display names are not substituted for executable names"
 
 echo
 echo "All launcher regression checks passed."
