@@ -24,7 +24,6 @@ else
   echo "✓ Bluetooth on"
 fi
 
-WIFI_DEV=$(/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I 2>/dev/null | awk '/AirPort/ {print $2}')
 if ifconfig en0 2>/dev/null | grep -q 'status: active' || ifconfig en1 2>/dev/null | grep -q 'status: active'; then
   echo "✓ Wi-Fi connected"
 else
