@@ -1,6 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Resolve this script's own directory from BASH_SOURCE (not the caller's
+# current working directory), so sibling resources (the AppleScript
+# selector) can always be found regardless of where or how this script is
+# invoked -- from the repo root, from another directory, by absolute path,
+# or by automation with an unrelated working directory. This is a portable
+# (dirname + cd + pwd) pattern that works on the macOS-provided Bash
+# without relying on GNU-only readlink -f/realpath.
+if ! SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; then
+  echo "✖ Could not resolve the directory containing this script." >&2
+  exit 1
+fi
+SELECTOR_PATH="$SCRIPT_DIR/select_zoom_camera.scpt"
+
+# Verify the selector resource is present before doing anything else (in
+# particular, before launching the application), so a missing/misplaced
+# resource produces a clear, immediate error instead of launching Zoom
+# only to fail confusingly at the AppleScript step.
+if [[ ! -f "$SELECTOR_PATH" || ! -r "$SELECTOR_PATH" ]]; then
+  echo "✖ Expected AppleScript selector not found or not readable: $SELECTOR_PATH" >&2
+  exit 1
+fi
+
 APP_NAME="Zoom"
 APP_MATCH="zoom.us"
 
@@ -77,4 +99,4 @@ fi
 sleep "$LAUNCHER_SETTLE_DELAY"
 
 # Select devices via AppleScript
-"$OSASCRIPT_BIN" scripts/select_zoom_camera.scpt
+"$OSASCRIPT_BIN" "$SELECTOR_PATH"
