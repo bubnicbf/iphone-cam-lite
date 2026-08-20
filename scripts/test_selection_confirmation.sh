@@ -122,8 +122,8 @@ assert_source_contains "$ZOOM_SCPT" 'if item 1 of preCheck and markIndicatesSele
 #    and Teams): reading the control's current value before any click.
 assert_source_contains "$ZOOM_SCPT" 'set preCheck to readControlSelectionValue(procName, theControl)' "2. already-selected fast path (Zoom control)"
 assert_source_contains "$TEAMS_SCPT" 'set preCheck to readControlSelectionValue(procName, theControl)' "2. already-selected fast path (Teams control)"
-assert_source_contains "$ZOOM_SCPT" 'if item 1 of preCheck and namesMatch(item 2 of preCheck, deviceName) then' "2. already-selected fast path (Zoom control)"
-assert_source_contains "$TEAMS_SCPT" 'if item 1 of preCheck and namesMatch(item 2 of preCheck, deviceName) then' "2. already-selected fast path (Teams control)"
+assert_source_contains "$ZOOM_SCPT" 'if baselineReadable and namesMatch(baselineValue, deviceName) then' "2. already-selected fast path (Zoom control)"
+assert_source_contains "$TEAMS_SCPT" 'if baselineReadable and namesMatch(baselineValue, deviceName) then' "2. already-selected fast path (Teams control)"
 
 # 3. Click changes state to an exact match -- the poll loop returns
 #    {true, ""} only once namesMatch/markIndicatesSelected observes it.
@@ -131,24 +131,36 @@ assert_source_contains "$ZOOM_SCPT" 'if markIndicatesSelected(lastValue) then' "
 assert_source_contains "$ZOOM_SCPT" 'if namesMatch(lastValue, deviceName) then' "3. click-changes-to-exact-match (Zoom control)"
 assert_source_contains "$TEAMS_SCPT" 'if namesMatch(lastValue, deviceName) then' "3. click-changes-to-exact-match (Teams)"
 
-# 4 & 8. Click succeeds but the resulting value never changes to match,
-#    and the bounded confirmation window elapses -- a distinct, named
-#    timeout diagnostic (not silently treated as success).
-assert_source_contains "$ZOOM_SCPT" 'its mark/selected state never confirmed the change within' "4+8. click-value-unchanged / timeout (Zoom menu)"
-assert_source_contains "$ZOOM_SCPT" 'its resulting value never matched within' "4+8. click-value-unchanged / timeout (Zoom control)"
-assert_source_contains "$TEAMS_SCPT" 'its resulting value never matched within' "4+8. click-value-unchanged / timeout (Teams)"
+# 4. Click succeeds but the resulting value never changes to match, and
+#    the bounded confirmation window elapses -- distinguished from
+#    scenario 5 (a *different* device becoming selected) by comparing the
+#    post-timeout value against the pre-click baseline, not folded into
+#    one generic "didn't match" message.
+assert_source_contains "$ZOOM_SCPT" 'its mark/selected state never confirmed the change within' "4. click-value-unchanged / timeout (Zoom menu)"
+assert_source_contains "$ZOOM_SCPT" 'the selection remained unchanged within' "4. click-value-unchanged (Zoom control)"
+assert_source_contains "$TEAMS_SCPT" 'the selection remained unchanged within' "4. click-value-unchanged (Teams)"
 
-# 5. Click changes the control to a different (wrong) device -- namesMatch
-#    is exact equality, so a non-matching resulting value keeps polling /
-#    times out rather than being accepted; covered by the same exact-match
-#    contract asserted in Section A (namesMatch uses "is", not "contains").
+# 5. Click changes the control to a different (wrong) device -- reported
+#    with its own distinct "a different device became selected" message
+#    (never folded into the "remained unchanged" case), and still backed
+#    by the same exact-equality contract asserted in Section A (namesMatch
+#    uses "is", not "contains").
+assert_source_contains "$ZOOM_SCPT" 'a different device became selected within' "5. click-changes-to-wrong-device (Zoom control)"
+assert_source_contains "$TEAMS_SCPT" 'a different device became selected within' "5. click-changes-to-wrong-device (Teams)"
 assert_source_contains "$ZOOM_SCPT" 'return (trimWhitespace(actualValue) is (trimWhitespace(requestedValue)))' "5. click-changes-to-wrong-device (Zoom exact equality)"
 assert_source_contains "$TEAMS_SCPT" 'return (trimWhitespace(actualValue) is (trimWhitespace(requestedValue)))' "5. click-changes-to-wrong-device (Teams exact equality)"
 
-# 6. Requested item is absent entirely -- a distinct "unavailable" error,
-#    not folded into the timeout/unreadable diagnostics.
-assert_source_contains "$ZOOM_SCPT" 'unavailable on the matched control: ' "6. item-absent (Zoom)"
-assert_source_contains "$TEAMS_SCPT" 'unavailable on the matched control: ' "6. item-absent (Teams)"
+# 6. Requested item is absent entirely -- a distinct "not found" error,
+#    separate from a genuine click failure on the item itself or on the
+#    control that opens it (never folded into one generic "unavailable"
+#    message).
+assert_source_contains "$ZOOM_SCPT" "not found in the matched control's menu" "6. item-absent (Zoom)"
+assert_source_contains "$TEAMS_SCPT" "not found in the matched control's menu" "6. item-absent (Teams)"
+assert_source_contains "$ZOOM_SCPT" 'clicking the matched control for \"' "6b. control click failure distinct from item-absent (Zoom)"
+assert_source_contains "$TEAMS_SCPT" 'clicking the matched control for \"' "6b. control click failure distinct from item-absent (Teams)"
+assert_source_contains "$ZOOM_SCPT" 'clicking device item \"' "6c. device-item click failure distinct from item-absent (Zoom)"
+assert_source_contains "$TEAMS_SCPT" 'clicking device item \"' "6c. device-item click failure distinct from item-absent (Teams)"
+assert_source_contains "$ZOOM_SCPT" ': item not found"' "6d. menu-route item-not-found distinct from click-failed (Zoom)"
 
 # 7. Resulting value/state is unreadable -- a distinct diagnostic from a
 #    genuine mismatch, and never assumed to match when unreadable.
@@ -204,6 +216,45 @@ assert_source_contains "$ZOOM_SCPT" 'character startIdx of s is " " or character
 assert_source_contains "$TEAMS_SCPT" 'character startIdx of s is " " or character startIdx of s is tab or character startIdx of s is return or character startIdx of s is linefeed' "14. Unicode/punctuation-exact-match (Teams trim char set)"
 
 echo "PASS: [contract] all 14 required confirmation scenarios have a corresponding, verifiable code path"
+
+# ===========================================================================
+# Section B2: post-selection verification failure messages are clearly
+# distinguished from one another (not folded into one generic diagnostic).
+# This is the specific gap this fix closes on top of the existing
+# confirmation framework: "item not found" is now separate from "click
+# failed", and "selection remained unchanged" is now separate from "a
+# different device became selected".
+# ===========================================================================
+echo
+echo "== Static checks: verification failure messages are clearly distinguished =="
+
+# The requested device item being absent is reported distinctly from a
+# click that genuinely failed (on the control that opens the item's menu,
+# or on the item itself) -- three separate messages, never one combined
+# "unavailable" catch-all.
+for pair in "$ZOOM_SCPT:Zoom" "$TEAMS_SCPT:Teams"; do
+  file="${pair%%:*}"
+  label="${pair##*:}"
+  assert_source_contains "$file" "not found in the matched control's menu" "item-not-found distinct message / $label"
+  assert_source_contains "$file" 'clicking the matched control for \"' "control-click-failed distinct message / $label"
+  assert_source_contains "$file" 'clicking device item \"' "item-click-failed distinct message / $label"
+  assert_source_not_contains "$file" "unavailable on the matched control" "no regression to the combined item/click message / $label"
+done
+
+assert_source_contains "$ZOOM_SCPT" 'exists menu item itemName of menu submenuTitle of menu menuTitle of menu bar 1' "menu-route existence check precedes the click (Zoom)"
+assert_source_contains "$ZOOM_SCPT" ': item not found"' "menu-route item-not-found distinct message (Zoom)"
+assert_source_contains "$ZOOM_SCPT" ': click failed: "' "menu-route click-failed distinct message (Zoom)"
+
+for pair in "$ZOOM_SCPT:Zoom" "$TEAMS_SCPT:Teams"; do
+  file="${pair%%:*}"
+  label="${pair##*:}"
+  assert_source_contains "$file" 'set baselineReadable to item 1 of preCheck' "baseline captured before clicking / $label"
+  assert_source_contains "$file" 'the selection remained unchanged within' "unchanged-vs-timeout distinct message / $label"
+  assert_source_contains "$file" 'a different device became selected within' "wrong-device-vs-timeout distinct message / $label"
+  assert_source_not_contains "$file" "never matched within" "no regression to the combined unchanged/wrong-device message / $label"
+done
+
+echo "PASS: [contract] item-not-found is distinguished from click-failed, and selection-unchanged is distinguished from a-different-device-selected, in both selectors' verification diagnostics"
 
 # ===========================================================================
 # Section C: osacompile validation (syntax only; never executed).

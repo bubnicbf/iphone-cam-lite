@@ -336,7 +336,13 @@ on selectDeviceFromCandidates(procName, candidates, deviceName, controlLabel)
   set theControl to item 1 of candidates
 
   set preCheck to readControlSelectionValue(procName, theControl)
-  if item 1 of preCheck and namesMatch(item 2 of preCheck, deviceName) then
+  set baselineReadable to item 1 of preCheck
+  if baselineReadable then
+    set baselineValue to item 2 of preCheck
+  else
+    set baselineValue to "(unread)"
+  end if
+  if baselineReadable and namesMatch(baselineValue, deviceName) then
     return {true, ""}
   end if
 
@@ -345,9 +351,16 @@ on selectDeviceFromCandidates(procName, candidates, deviceName, controlLabel)
       try
         click theControl
         delay 0.2
+      on error errMsg number errNum
+        return {false, "clicking the matched control for \"" & deviceName & "\" failed: " & errMsg & " (error " & errNum & ")"}
+      end try
+      if not (exists (first menu item whose title is deviceName) of menu 1 of theControl) then
+        return {false, "device item \"" & deviceName & "\" not found in the matched control's menu"}
+      end if
+      try
         click (first menu item whose title is deviceName) of menu 1 of theControl
       on error errMsg number errNum
-        return {false, "device item \"" & deviceName & "\" unavailable on the matched control: " & errMsg & " (error " & errNum & ")"}
+        return {false, "clicking device item \"" & deviceName & "\" failed: " & errMsg & " (error " & errNum & ")"}
       end try
     end tell
   end tell
@@ -369,7 +382,11 @@ on selectDeviceFromCandidates(procName, candidates, deviceName, controlLabel)
     set elapsed to elapsed + confirmationPollInterval
   end repeat
   if lastReadable then
-    return {false, "clicked \"" & deviceName & "\" on the matched control but its resulting value never matched within " & confirmationTimeoutSeconds & "s (last observed: \"" & lastValue & "\")"}
+    if baselineReadable and namesMatch(lastValue, baselineValue) then
+      return {false, "clicked \"" & deviceName & "\" on the matched control but the selection remained unchanged within " & confirmationTimeoutSeconds & "s (still \"" & lastValue & "\")"}
+    else
+      return {false, "clicked \"" & deviceName & "\" on the matched control but a different device became selected within " & confirmationTimeoutSeconds & "s (observed \"" & lastValue & "\", expected \"" & deviceName & "\")"}
+    end if
   else
     return {false, "clicked \"" & deviceName & "\" on the matched control but its resulting value could not be read to confirm the change"}
   end if

@@ -123,18 +123,24 @@ end markIndicatesSelected
 --   Meeting menu > <submenuLabel> submenu > <itemName> item
 -- Returns {true, ""} only if the click genuinely succeeded, or
 -- {false, diagnostic} carrying the underlying AppleScript error message
--- and number -- never a silently discarded failure. This is a click-only
+-- and number -- never a silently discarded failure. Checks the item's
+-- existence before attempting the click, so a missing item is reported
+-- as "item not found" rather than being folded into the same message as
+-- a click that failed for some other reason. This is a click-only
 -- helper; it does not by itself confirm the resulting selection state --
 -- see confirmMenuSelection below, which is what "on run argv" actually
 -- calls.
 on pickMenuItem(procName, menuTitle, submenuTitle, itemName)
   tell application "System Events"
     tell process procName
+      if not (exists menu item itemName of menu submenuTitle of menu menuTitle of menu bar 1) then
+        return {false, "menu route (" & menuTitle & " > " & submenuTitle & " > " & itemName & "): item not found"}
+      end if
       try
         click menu item itemName of menu submenuTitle of menu menuTitle of menu bar 1
         return {true, ""}
       on error errMsg number errNum
-        return {false, "menu route (" & menuTitle & " > " & submenuTitle & " > " & itemName & ") failed: " & errMsg & " (error " & errNum & ")"}
+        return {false, "menu route (" & menuTitle & " > " & submenuTitle & " > " & itemName & "): click failed: " & errMsg & " (error " & errNum & ")"}
       end try
     end tell
   end tell
@@ -369,7 +375,13 @@ on selectDeviceFromCandidates(procName, candidates, deviceName, controlLabel)
   set theControl to item 1 of candidates
 
   set preCheck to readControlSelectionValue(procName, theControl)
-  if item 1 of preCheck and namesMatch(item 2 of preCheck, deviceName) then
+  set baselineReadable to item 1 of preCheck
+  if baselineReadable then
+    set baselineValue to item 2 of preCheck
+  else
+    set baselineValue to "(unread)"
+  end if
+  if baselineReadable and namesMatch(baselineValue, deviceName) then
     return {true, ""}
   end if
 
@@ -378,9 +390,16 @@ on selectDeviceFromCandidates(procName, candidates, deviceName, controlLabel)
       try
         click theControl
         delay 0.3
+      on error errMsg number errNum
+        return {false, "clicking the matched control for \"" & deviceName & "\" failed: " & errMsg & " (error " & errNum & ")"}
+      end try
+      if not (exists (first menu item whose title is deviceName) of menu 1 of theControl) then
+        return {false, "device item \"" & deviceName & "\" not found in the matched control's menu"}
+      end if
+      try
         click (first menu item whose title is deviceName) of menu 1 of theControl
       on error errMsg number errNum
-        return {false, "device item \"" & deviceName & "\" unavailable on the matched control: " & errMsg & " (error " & errNum & ")"}
+        return {false, "clicking device item \"" & deviceName & "\" failed: " & errMsg & " (error " & errNum & ")"}
       end try
     end tell
   end tell
@@ -402,7 +421,11 @@ on selectDeviceFromCandidates(procName, candidates, deviceName, controlLabel)
     set elapsed to elapsed + confirmationPollInterval
   end repeat
   if lastReadable then
-    return {false, "clicked \"" & deviceName & "\" on the matched control but its resulting value never matched within " & confirmationTimeoutSeconds & "s (last observed: \"" & lastValue & "\")"}
+    if baselineReadable and namesMatch(lastValue, baselineValue) then
+      return {false, "clicked \"" & deviceName & "\" on the matched control but the selection remained unchanged within " & confirmationTimeoutSeconds & "s (still \"" & lastValue & "\")"}
+    else
+      return {false, "clicked \"" & deviceName & "\" on the matched control but a different device became selected within " & confirmationTimeoutSeconds & "s (observed \"" & lastValue & "\", expected \"" & deviceName & "\")"}
+    end if
   else
     return {false, "clicked \"" & deviceName & "\" on the matched control but its resulting value could not be read to confirm the change"}
   end if
