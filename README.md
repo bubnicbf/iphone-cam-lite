@@ -109,10 +109,13 @@ use its Title or Description field as the override value.
 - Accessibility permission for your terminal/shell is still required either way (see Troubleshooting) -- UI-label overrides change what the automation looks for, not whether it's allowed to control the app.
 - For Zoom, the launcher first tries the Meeting menu route, then falls back to a bounded accessibility search across Zoom's currently visible windows if that route doesn't resolve both devices.
 - For Teams (new client), the launcher opens Settings → Devices (falling back to the Command-, shortcut if the Settings menu item isn't found) and then searches visible settings windows/sheets for the camera and microphone controls.
+- Teams must already be signed in before you run `make teams`: the automation only drives the Settings → Devices UI of an already-authenticated client -- it never enters credentials, clicks a sign-in or "Pick an account" button, or completes any part of authentication for you. If Teams is signed out, mid-sign-in, or still loading its main window when the launcher runs, device selection is not expected to succeed; sign in and let Teams fully load first, then run `make teams` again.
 - Both selectors require that *both* the camera and the microphone are read back and confirmed selected via the app's own accessibility state (a menu item's mark/checked state, or a pop-up control's resulting value) -- never inferred merely from a click command completing -- before reporting success, and exit nonzero with a specific, actionable error (naming the device or stage that failed, and which of item-not-found / click-failed / value-unchanged / wrong-device / unreadable-state / timeout / ambiguous-match caused it) rather than continuing silently -- there is no promise of compatibility with every future Zoom or Teams release, since this remains UI/accessibility scripting rather than an official automation API; a large enough interface change can still require an updated label, or can stop exposing the accessibility state this confirmation relies on, or a newer version of this repo.
 
 ## Troubleshooting
 
+- If `make teams` fails right after launch, or fails with a Settings/Devices error that doesn't match anything in your setup:
+	- Open Microsoft Teams yourself first, sign in if prompted, and wait until the main Teams window (chats/calls/teams list) is fully loaded before running `make teams` -- the automation does not detect or wait out a sign-in, account-selection, or loading screen, and does not interact with authentication UI in any way.
 - If your iPhone doesn’t appear:
 	- Ensure Wi-Fi, Bluetooth, Handoff are on; same Apple ID on both devices.
 	- Unlock iPhone; keep it near the Mac; mount it in landscape if possible.
