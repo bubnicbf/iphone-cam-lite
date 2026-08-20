@@ -121,8 +121,11 @@ use its Title or Description field as the override value.
 	- Open the app’s device menu once manually so macOS grants UI scripting access.
 	- Re-run `make zoom` or `make teams` after the window is fully loaded.
 	- Grant “Accessibility” permission to Terminal or your shell in System Settings → Privacy & Security → Accessibility.
-- If the launcher exits with a selector error naming a specific device or stage (for example, `camera "..." was not selected`, `Teams Devices panel could not be located`, or an ambiguous-match error):
-	- The error text names exactly which device or step failed -- start there rather than re-running blindly.
+- If the launcher exits with a selector error naming a specific device or stage (for example, `camera "..." was not selected`, `Teams settings could not be opened`, `Teams Devices panel could not be located`, or an ambiguous-match error):
+	- This is expected behavior, not a bug: `make zoom`/`make teams` now exits nonzero and reports the exact stage that failed (opening a menu, opening Settings, locating Devices, locating the camera/microphone control, or selecting the requested device item) whenever UI automation cannot confirm *both* devices were actually selected -- it never reports success on a partial or guessed result.
+	- The error text names exactly which device or step failed, and includes the underlying AppleScript error message and error number where one was available -- start there rather than re-running blindly.
 	- Confirm the requested device name (`CAMERA_NAME`/`MICROPHONE_NAME`) exactly matches an entry in the app's own camera/microphone menu.
 	- If Zoom or Teams is not running in English, or a UI update changed a menu/button, set the matching `ZOOM_*`/`TEAMS_*` label override (see “Configuring UI labels” above).
+	- Confirm Accessibility permission is still granted to Terminal/your shell (permission can be silently revoked by a macOS update or app reinstall).
+	- If none of the above explains it, a recent Zoom or Teams update may have changed its interface in a way label overrides alone can't bridge -- check the installed application version and whether this repository has a newer release for it.
 	- An “ambiguous match” error means more than one control matched a label -- make the corresponding label override more specific.

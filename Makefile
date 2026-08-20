@@ -23,3 +23,4 @@ test:
 	./scripts/test_check_prereqs.sh
 	./scripts/test_launcher_failures.sh
 	./scripts/test_ui_label_configuration.sh
+	./scripts/test_applescript_error_handling.sh

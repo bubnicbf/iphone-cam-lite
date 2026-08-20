@@ -51,15 +51,19 @@ end resolveArg
 
 -- pickMenuItem attempts the exact menu-bar route:
 --   Meeting menu > <submenuLabel> submenu > <itemName> item
--- Returns true only if the click genuinely succeeded (never silently).
+-- Returns {true, ""} only if the click genuinely succeeded, or
+-- {false, diagnostic} carrying the underlying AppleScript error message
+-- and number -- never a silently discarded failure. The raw error text
+-- naturally distinguishes a missing parent menu/submenu from a missing
+-- item, since AppleScript's own error names the object it could not get.
 on pickMenuItem(procName, menuTitle, submenuTitle, itemName)
   tell application "System Events"
     tell process procName
       try
         click menu item itemName of menu submenuTitle of menu menuTitle of menu bar 1
-        return true
-      on error
-        return false
+        return {true, ""}
+      on error errMsg number errNum
+        return {false, "menu route (" & menuTitle & " > " & submenuTitle & " > " & itemName & ") failed: " & errMsg & " (error " & errNum & ")"}
       end try
     end tell
   end tell
@@ -75,6 +79,10 @@ on relevantWindows(procName)
       set allWindows to windows
       repeat with w in allWindows
         set end of foundWindows to w
+        -- Optional, genuinely harmless: many windows have no sheets at
+        -- all, which is normal, not a failure worth reporting. Skipping
+        -- sheet discovery for such a window never drops the window
+        -- itself from foundWindows.
         try
           set sheetList to sheets of w
           repeat with s in sheetList
@@ -92,6 +100,10 @@ end relevantWindows
 -- recursive walk of the entire accessibility tree.
 on boundedContainers(procName, win)
   set containerList to {win}
+  -- Each lookup below is optional and genuinely harmless: a window
+  -- missing a given container class (no groups, no scroll areas, no
+  -- toolbars) is normal, not a failure -- win itself is always still
+  -- returned, so callers always have at least one container to search.
   tell application "System Events"
     tell process procName
       try
@@ -113,6 +125,11 @@ end boundedContainers
 -- controlLabel. Returns every match (not just the first) so the caller
 -- can detect ambiguity instead of guessing which one is correct.
 on findControlCandidates(procName, containerList, controlLabel)
+  -- Every try below is optional and genuinely harmless: a container
+  -- lacking buttons/pop-up buttons, or a single element lacking a
+  -- description/title, simply does not contribute a match -- it never
+  -- hides a required failure, since the caller (selectDeviceFromCandidates)
+  -- explicitly reports "no control found" when matches ends up empty.
   set matches to {}
   tell application "System Events"
     tell process procName
@@ -161,8 +178,8 @@ on selectDeviceFromCandidates(procName, candidates, deviceName, controlLabel)
         delay 0.3
         click (first menu item whose title is deviceName) of menu 1 of theControl
         return {true, ""}
-      on error errMsg
-        return {false, "device item \"" & deviceName & "\" unavailable on the matched control (" & errMsg & ")"}
+      on error errMsg number errNum
+        return {false, "device item \"" & deviceName & "\" unavailable on the matched control: " & errMsg & " (error " & errNum & ")"}
       end try
     end tell
   end tell
@@ -191,16 +208,26 @@ on run argv
   end tell
 
   set camPicked to false
-  set camDiagnostic to "menu route (" & meetingMenuLabel & " > " & cameraMenuLabel & ") did not select the requested camera"
+  set camDiagnostic to "no strategy has been attempted yet"
   set micPicked to false
-  set micDiagnostic to "menu route (" & meetingMenuLabel & " > " & microphoneMenuLabel & ") did not select the requested microphone"
+  set micDiagnostic to "no strategy has been attempted yet"
 
   -- Strategy 1: exact menu route (preferred when its labels match).
-  if pickMenuItem(zoomProcessName, meetingMenuLabel, cameraMenuLabel, desiredCamera) then
+  -- pickMenuItem's captured diagnostic becomes the starting camDiagnostic/
+  -- micDiagnostic value, so a menu-route failure is never replaced by a
+  -- generic placeholder -- if Strategy 2 also fails below, both the menu
+  -- route's real error and the fallback's real error are preserved.
+  set camMenuResult to pickMenuItem(zoomProcessName, meetingMenuLabel, cameraMenuLabel, desiredCamera)
+  if item 1 of camMenuResult then
     set camPicked to true
+  else
+    set camDiagnostic to item 2 of camMenuResult
   end if
-  if pickMenuItem(zoomProcessName, meetingMenuLabel, microphoneMenuLabel, desiredMic) then
+  set micMenuResult to pickMenuItem(zoomProcessName, meetingMenuLabel, microphoneMenuLabel, desiredMic)
+  if item 1 of micMenuResult then
     set micPicked to true
+  else
+    set micDiagnostic to item 2 of micMenuResult
   end if
 
   -- Strategy 2: bounded semantic accessibility fallback, only for

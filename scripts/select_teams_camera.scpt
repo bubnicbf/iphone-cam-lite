@@ -48,29 +48,33 @@ on resolveArg(argv, idx, defaultValue)
 end resolveArg
 
 -- openSettingsMenu tries the configured Settings menu label under the
--- app's own menu-bar item. Returns true only if the click succeeded.
+-- app's own menu-bar item. Returns {true, ""} only if the click
+-- succeeded, or {false, diagnostic} carrying the underlying AppleScript
+-- error message and number -- never a silently discarded failure.
 on openSettingsMenu(procName, menuLabel)
   tell application "System Events"
     tell process procName
       try
         click menu item menuLabel of menu 1 of menu bar item appName of menu bar 1
-        return true
-      on error
-        return false
+        return {true, ""}
+      on error errMsg number errNum
+        return {false, "Settings menu (" & menuLabel & ") failed: " & errMsg & " (error " & errNum & ")"}
       end try
     end tell
   end tell
 end openSettingsMenu
 
 -- openSettingsShortcut is the layout-independent Command-comma fallback.
+-- Returns {true, ""} on success, or {false, diagnostic} -- never a
+-- silently discarded failure.
 on openSettingsShortcut(procName)
   tell application "System Events"
     tell process procName
       try
         keystroke "," using command down
-        return true
-      on error
-        return false
+        return {true, ""}
+      on error errMsg number errNum
+        return {false, "Command-, shortcut failed: " & errMsg & " (error " & errNum & ")"}
       end try
     end tell
   end tell
@@ -86,6 +90,10 @@ on relevantWindows(procName)
       set allWindows to windows
       repeat with w in allWindows
         set end of foundWindows to w
+        -- Optional, genuinely harmless: many windows have no sheets at
+        -- all, which is normal, not a failure worth reporting. Skipping
+        -- sheet discovery for such a window never drops the window
+        -- itself from foundWindows.
         try
           set sheetList to sheets of w
           repeat with s in sheetList
@@ -102,6 +110,11 @@ end relevantWindows
 -- tab groups, and toolbars -- a bounded set, not a full-tree walk.
 on boundedContainers(procName, win)
   set containerList to {win}
+  -- Each lookup below is optional and genuinely harmless: a window
+  -- missing a given container class (no groups, no scroll areas, no tab
+  -- groups, no toolbars) is normal, not a failure -- win itself is
+  -- always still returned, so callers always have at least one
+  -- container to search.
   tell application "System Events"
     tell process procName
       try
@@ -125,6 +138,12 @@ end boundedContainers
 -- accepted as a button, radio button, or row whose title or description
 -- matches label -- across the given bounded containers.
 on findNavigationCandidates(procName, containerList, label)
+  -- Every try below is optional and genuinely harmless: a container
+  -- lacking buttons/radio buttons/rows, or a single element lacking a
+  -- title/description, simply does not contribute a match -- it never
+  -- hides a required failure, since the caller in "on run argv"
+  -- explicitly reports "no window exposed a control matching ..." when
+  -- matches ends up empty.
   set matches to {}
   tell application "System Events"
     tell process procName
@@ -164,19 +183,22 @@ end findNavigationCandidates
 
 -- activateCandidate clicks a matched element, falling back to an
 -- explicit AXPress action for element kinds (such as static rows) that
--- don't always respond to a plain click.
+-- don't always respond to a plain click. Returns {true, ""} on success,
+-- or {false, diagnostic} capturing both the click failure and the
+-- AXPress failure -- never a silently discarded failure, and never a
+-- generic message that hides which of the two strategies was tried.
 on activateCandidate(procName, target)
   tell application "System Events"
     tell process procName
       try
         click target
-        return true
-      on error
+        return {true, ""}
+      on error clickErrMsg number clickErrNum
         try
           perform action "AXPress" of target
-          return true
-        on error
-          return false
+          return {true, ""}
+        on error pressErrMsg number pressErrNum
+          return {false, "click failed: " & clickErrMsg & " (error " & clickErrNum & "); AXPress fallback failed: " & pressErrMsg & " (error " & pressErrNum & ")"}
         end try
       end try
     end tell
@@ -186,6 +208,11 @@ end activateCandidate
 -- findControlCandidates looks for camera/microphone pop-up controls by
 -- description or title match across the given bounded containers.
 on findControlCandidates(procName, containerList, controlLabel)
+  -- Every try below is optional and genuinely harmless: a container
+  -- lacking pop-up buttons, or a single element lacking a
+  -- description/title, simply does not contribute a match -- it never
+  -- hides a required failure, since the caller (selectDeviceFromCandidates)
+  -- explicitly reports "no control found" when matches ends up empty.
   set matches to {}
   tell application "System Events"
     tell process procName
@@ -223,8 +250,8 @@ on selectDeviceFromCandidates(procName, candidates, deviceName, controlLabel)
         delay 0.2
         click (first menu item whose title is deviceName) of menu 1 of theControl
         return {true, ""}
-      on error errMsg
-        return {false, "device item \"" & deviceName & "\" unavailable on the matched control (" & errMsg & ")"}
+      on error errMsg number errNum
+        return {false, "device item \"" & deviceName & "\" unavailable on the matched control: " & errMsg & " (error " & errNum & ")"}
       end try
     end tell
   end tell
@@ -252,12 +279,21 @@ on run argv
   end tell
 
   -- Stage 1: open Settings (configured menu label, then Command-comma).
-  set settingsOpened to openSettingsMenu(appName, settingsMenuLabel)
+  -- Each strategy's captured diagnostic is preserved; if both fail, the
+  -- final error names both attempted strategies with their real
+  -- underlying AppleScript error details rather than a generic message.
+  set menuResult to openSettingsMenu(appName, settingsMenuLabel)
+  set settingsOpened to item 1 of menuResult
+  set settingsDiagnostic to item 2 of menuResult
   if not settingsOpened then
-    set settingsOpened to openSettingsShortcut(appName)
+    set shortcutResult to openSettingsShortcut(appName)
+    set settingsOpened to item 1 of shortcutResult
+    if not settingsOpened then
+      set settingsDiagnostic to settingsDiagnostic & "; " & (item 2 of shortcutResult)
+    end if
   end if
   if not settingsOpened then
-    error "Teams settings could not be opened (menu \"" & settingsMenuLabel & "\" and the Command-, shortcut both failed)."
+    error "Teams settings could not be opened (" & settingsDiagnostic & ")."
   end if
   delay 0.8
 
@@ -272,11 +308,12 @@ on run argv
     if (count of navCandidates) > 1 then
       set devicesDiagnostic to "ambiguous match: " & (count of navCandidates) & " controls matched \"" & devicesLabel & "\""
     else if (count of navCandidates) is 1 then
-      if activateCandidate(appName, item 1 of navCandidates) then
+      set activateResult to activateCandidate(appName, item 1 of navCandidates)
+      if item 1 of activateResult then
         set devicesActivated to true
         exit repeat
       else
-        set devicesDiagnostic to "found a control matching \"" & devicesLabel & "\" but could not activate it"
+        set devicesDiagnostic to "found a control matching \"" & devicesLabel & "\" but could not activate it: " & (item 2 of activateResult)
       end if
     end if
   end repeat
