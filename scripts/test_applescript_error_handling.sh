@@ -53,11 +53,20 @@ for pair in "$ZOOM_SCPT:Zoom" "$TEAMS_SCPT:Teams"; do
   # error entirely. All of them now return a {success, diagnostic} pair
   # instead, so no "return true" / "return false" statement should exist
   # anywhere in either production selector.
-  if grep -qE '(^|[^"a-zA-Z])return true([^"a-zA-Z]|$)' "$file"; then
-    fail "[static / $label] found a bare 'return true' -- results must be a {success, diagnostic} pair, not a bare Boolean"
+  # markIndicatesSelected (Zoom only) is a pure predicate over an
+  # already-obtained string -- interpreting a menu item's mark character
+  # or a boolean-as-text "selected" attribute -- not a click or
+  # error-handling result, so it legitimately returns a bare true/false.
+  # It is the one deliberate, narrow exception to the check below: its
+  # body is excluded from the source scanned for bare Boolean results,
+  # while every other handler in either file is still fully checked.
+  file_sans_pure_predicates="$(awk '/^on markIndicatesSelected\(/{skip=1} skip{ if ($0 ~ /^end markIndicatesSelected/) skip=0; next } {print}' "$file")"
+
+  if echo "$file_sans_pure_predicates" | grep -qE '(^|[^"a-zA-Z])return true([^"a-zA-Z]|$)'; then
+    fail "[static / $label] found a bare 'return true' outside markIndicatesSelected -- results must be a {success, diagnostic} pair, not a bare Boolean"
   fi
-  if grep -qE '(^|[^"a-zA-Z])return false([^"a-zA-Z]|$)' "$file"; then
-    fail "[static / $label] found a bare 'return false' -- a caught error must be recorded as a {false, diagnostic} pair, never a bare Boolean"
+  if echo "$file_sans_pure_predicates" | grep -qE '(^|[^"a-zA-Z])return false([^"a-zA-Z]|$)'; then
+    fail "[static / $label] found a bare 'return false' outside markIndicatesSelected -- a caught error must be recorded as a {false, diagnostic} pair, never a bare Boolean"
   fi
 
   # --- Every remaining "on error" clause captures both a message and a

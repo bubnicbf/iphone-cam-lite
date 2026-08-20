@@ -1,4 +1,7 @@
--- Selects the configured camera and microphone in Microsoft Teams' own UI.
+-- Selects the configured camera and microphone in Microsoft Teams' own UI,
+-- and does not report success until the resulting selected value of each
+-- pop-up control has actually been read back and confirmed to exactly
+-- match the requested device name.
 --
 -- Command-line arguments (all optional; a missing or empty argument uses
 -- the English default noted below, so `osascript select_teams_camera.scpt`
@@ -19,15 +22,30 @@
 -- direct containers -- never assumed to be "window 1" or a fixed AX
 -- role -- accepting a button, row, or other selectable navigation
 -- element. Locate the camera/microphone pop-up controls the same way.
--- Camera and microphone success are tracked independently; the script
--- only succeeds once both are confirmed selected, and raises one
--- actionable error identifying the failed stage otherwise.
+--
+-- A click on a camera/microphone pop-up item is never treated as success
+-- by itself: after clicking, the control's resulting value/title is read
+-- back and compared against the requested device name with exact text
+-- equality (see namesMatch below) before the device counts as confirmed.
+-- If the requested device is already selected before any click, that is
+-- treated as confirmed success and no click is issued. Confirmation polls
+-- a small, bounded number of times (see confirmationTimeoutSeconds /
+-- confirmationPollInterval below) rather than waiting indefinitely; if the
+-- timeout is reached, or the control's value cannot be read at all, the
+-- device is treated as unconfirmed, never as successful. Camera and
+-- microphone confirmation are tracked independently; the script only
+-- succeeds once both are confirmed, and raises one actionable error
+-- identifying the failed stage otherwise.
 --
 -- Known limitation: this remains UI/accessibility scripting, not an
--- official Teams automation API. A Teams release that removes the
--- Settings/Devices panel entirely, moves device selection into a
--- different surface (e.g. an in-meeting-only control), or requires an
--- unlisted extra step is outside what label overrides alone can fix.
+-- official Teams automation API. Confirmation relies on Teams exposing a
+-- readable value/title on its camera/microphone pop-up controls; a Teams
+-- release that removes the Settings/Devices panel entirely, moves device
+-- selection into a different surface (e.g. an in-meeting-only control),
+-- stops exposing a readable control value, or requires an unlisted extra
+-- step is outside what label overrides alone can fix -- confirmation will
+-- correctly report itself as unavailable rather than assume success in
+-- that case.
 
 property desiredCamera : "iPhone Camera"
 property desiredMic : "iPhone Microphone"
@@ -36,6 +54,13 @@ property settingsMenuLabel : "Settings"
 property devicesLabel : "Devices"
 property cameraControlLabel : "Camera"
 property microphoneControlLabel : "Microphone"
+
+-- Bounded, documented confirmation polling: at most ~12 reads spread over
+-- 3 seconds, never an indefinite wait. Small enough to keep a failed
+-- launch fast, large enough to absorb Teams' own UI update latency after
+-- a click.
+property confirmationTimeoutSeconds : 3.0
+property confirmationPollInterval : 0.25
 
 -- resolveArg returns argv's idx-th item if present and non-empty,
 -- otherwise defaultValue.
@@ -46,6 +71,40 @@ on resolveArg(argv, idx, defaultValue)
   end if
   return defaultValue
 end resolveArg
+
+-- trimWhitespace strips only leading/trailing spaces, tabs, and newlines
+-- -- the one "insignificant representation difference" this script
+-- normalizes. Everything else (case, punctuation, apostrophes, internal
+-- spacing, non-English characters) is left completely untouched, so
+-- namesMatch below never treats two genuinely different device names as
+-- equivalent. Identical to select_zoom_camera.scpt's helper of the same
+-- name.
+on trimWhitespace(s)
+  set n to count of s
+  set startIdx to 1
+  repeat while startIdx <= n and (character startIdx of s is " " or character startIdx of s is tab or character startIdx of s is return or character startIdx of s is linefeed)
+    set startIdx to startIdx + 1
+  end repeat
+  if startIdx > n then return ""
+  set endIdx to n
+  repeat while endIdx >= startIdx and (character endIdx of s is " " or character endIdx of s is tab or character endIdx of s is return or character endIdx of s is linefeed)
+    set endIdx to endIdx - 1
+  end repeat
+  if startIdx > endIdx then return ""
+  return text startIdx thru endIdx of s
+end trimWhitespace
+
+-- namesMatch is the single source of truth for "is this the requested
+-- device": exact, case-sensitive Unicode text equality after trimming
+-- surrounding whitespace -- never substring/contains matching, so
+-- "iPhone Camera" never matches "iPhone Camera Pro" or vice versa. Pure
+-- string logic with no System Events dependency, so it can be exercised
+-- with synthetic values independent of any live accessibility state.
+on namesMatch(actualValue, requestedValue)
+  considering case
+    return (trimWhitespace(actualValue) is (trimWhitespace(requestedValue)))
+  end considering
+end namesMatch
 
 -- openSettingsMenu tries the configured Settings menu label under the
 -- app's own menu-bar item. Returns {true, ""} only if the click
@@ -232,9 +291,41 @@ on findControlCandidates(procName, containerList, controlLabel)
   return matches
 end findControlCandidates
 
--- selectDeviceFromCandidates: see select_zoom_camera.scpt for the
--- identical rationale (exactly one unambiguous candidate, explicit
--- success/failure result, never a silent guess).
+-- readControlSelectionValue reads the control's resulting selected value
+-- -- preferring its "value" attribute (how pop-up buttons typically
+-- expose the current selection) and falling back to "title". Returns
+-- {true, value} on a successful read, or {false, diagnostic} if neither
+-- could be read -- never assumed to match when unreadable. Identical to
+-- select_zoom_camera.scpt's helper of the same name.
+on readControlSelectionValue(procName, control)
+  tell application "System Events"
+    tell process procName
+      try
+        return {true, ((value of control) as string)}
+      on error valueErrMsg number valueErrNum
+        try
+          return {true, (title of control)}
+        on error titleErrMsg number titleErrNum
+          return {false, "control's resulting value unreadable: " & valueErrMsg & " (error " & valueErrNum & "); title unreadable: " & titleErrMsg & " (error " & titleErrNum & ")"}
+        end try
+      end try
+    end tell
+  end tell
+end readControlSelectionValue
+
+-- selectDeviceFromCandidates is the full click-and-verify pipeline for
+-- exactly one unambiguous candidate control: if the control already reads
+-- back the requested device name, it reports confirmed success without
+-- clicking anything; otherwise it clicks the control and the requested
+-- device item, then polls readControlSelectionValue (bounded by
+-- confirmationTimeoutSeconds / confirmationPollInterval) until the
+-- resulting value exactly matches (via namesMatch), a click failure is
+-- observed, or the timeout expires. Returns {true, ""} only once the
+-- resulting value has actually been read back and matched, or
+-- {false, reason} identifying why it could not be confirmed (no
+-- candidate, ambiguous candidates, the device item itself being
+-- unavailable, or the resulting value never matching/being unreadable)
+-- -- never a silently swallowed failure or a click-only success.
 on selectDeviceFromCandidates(procName, candidates, deviceName, controlLabel)
   if (count of candidates) is 0 then
     return {false, "no control found matching \"" & controlLabel & "\""}
@@ -243,18 +334,45 @@ on selectDeviceFromCandidates(procName, candidates, deviceName, controlLabel)
     return {false, "ambiguous match: " & (count of candidates) & " controls matched \"" & controlLabel & "\""}
   end if
   set theControl to item 1 of candidates
+
+  set preCheck to readControlSelectionValue(procName, theControl)
+  if item 1 of preCheck and namesMatch(item 2 of preCheck, deviceName) then
+    return {true, ""}
+  end if
+
   tell application "System Events"
     tell process procName
       try
         click theControl
         delay 0.2
         click (first menu item whose title is deviceName) of menu 1 of theControl
-        return {true, ""}
       on error errMsg number errNum
         return {false, "device item \"" & deviceName & "\" unavailable on the matched control: " & errMsg & " (error " & errNum & ")"}
       end try
     end tell
   end tell
+
+  set elapsed to 0
+  set lastReadable to false
+  set lastValue to "(unread)"
+  repeat
+    set readResult to readControlSelectionValue(procName, theControl)
+    if item 1 of readResult then
+      set lastReadable to true
+      set lastValue to item 2 of readResult
+      if namesMatch(lastValue, deviceName) then
+        return {true, ""}
+      end if
+    end if
+    if elapsed >= confirmationTimeoutSeconds then exit repeat
+    delay confirmationPollInterval
+    set elapsed to elapsed + confirmationPollInterval
+  end repeat
+  if lastReadable then
+    return {false, "clicked \"" & deviceName & "\" on the matched control but its resulting value never matched within " & confirmationTimeoutSeconds & "s (last observed: \"" & lastValue & "\")"}
+  else
+    return {false, "clicked \"" & deviceName & "\" on the matched control but its resulting value could not be read to confirm the change"}
+  end if
 end selectDeviceFromCandidates
 
 on run argv
@@ -359,10 +477,10 @@ on run argv
 
   set failureParts to {}
   if not camPicked then
-    set end of failureParts to "camera \"" & desiredCamera & "\" was not selected (" & camDiagnostic & ")"
+    set end of failureParts to "camera \"" & desiredCamera & "\" was not confirmed selected (" & camDiagnostic & ")"
   end if
   if not micPicked then
-    set end of failureParts to "microphone \"" & desiredMic & "\" was not selected (" & micDiagnostic & ")"
+    set end of failureParts to "microphone \"" & desiredMic & "\" was not confirmed selected (" & micDiagnostic & ")"
   end if
   set failureText to ""
   repeat with p in failureParts
