@@ -1,6 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Resolve this script's own directory from BASH_SOURCE (not the caller's
+# current working directory), so sibling resources (the AppleScript
+# selector) can always be found regardless of where or how this script is
+# invoked -- from the repo root, from another directory, by absolute path,
+# or by automation with an unrelated working directory. This is a portable
+# (dirname + cd + pwd) pattern that works on the macOS-provided Bash
+# without relying on GNU-only readlink -f/realpath.
+if ! SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; then
+  echo "✖ Could not resolve the directory containing this script." >&2
+  exit 1
+fi
+SELECTOR_PATH="$SCRIPT_DIR/select_zoom_camera.scpt"
+
+# Verify the selector resource is present before doing anything else (in
+# particular, before launching the application), so a missing/misplaced
+# resource produces a clear, immediate error instead of launching Zoom
+# only to fail confusingly at the AppleScript step.
+if [[ ! -f "$SELECTOR_PATH" || ! -r "$SELECTOR_PATH" ]]; then
+  echo "✖ Expected AppleScript selector not found or not readable: $SELECTOR_PATH" >&2
+  exit 1
+fi
+
 APP_NAME="Zoom"
 APP_MATCH="zoom.us"
 
@@ -28,6 +50,26 @@ LAUNCHER_ATTEMPTS="${LAUNCHER_ATTEMPTS:-20}"
 LAUNCHER_POLL_INTERVAL="${LAUNCHER_POLL_INTERVAL:-0.5}"
 LAUNCHER_SETTLE_DELAY="${LAUNCHER_SETTLE_DELAY:-2}"
 OSASCRIPT_BIN="${OSASCRIPT_BIN:-/usr/bin/osascript}"
+
+# Desired camera/microphone menu labels, configurable at runtime via the
+# CAMERA_NAME / MICROPHONE_NAME environment variables (":-" applies the
+# default for both "unset" and "set but empty", per the documented
+# defaults in README.md) so users are never required to edit the
+# AppleScript source files to select a differently named device.
+CAMERA_NAME="${CAMERA_NAME:-iPhone Camera}"
+MICROPHONE_NAME="${MICROPHONE_NAME:-iPhone Microphone}"
+
+# Optional UI-label overrides for localized or reorganized Zoom
+# interfaces. Unset or empty values fall back to Zoom's current English
+# labels, exactly as documented in README.md. These are passed through to
+# select_zoom_camera.scpt as arguments 3-7 (see that file's header
+# comment for the full documented argument order); the selector uses them
+# for both its menu-based route and its accessibility fallback.
+ZOOM_MEETING_MENU_LABEL="${ZOOM_MEETING_MENU_LABEL:-Meeting}"
+ZOOM_CAMERA_MENU_LABEL="${ZOOM_CAMERA_MENU_LABEL:-Select Camera}"
+ZOOM_MICROPHONE_MENU_LABEL="${ZOOM_MICROPHONE_MENU_LABEL:-Select Microphone}"
+ZOOM_CAMERA_CONTROL_LABEL="${ZOOM_CAMERA_CONTROL_LABEL:-Select a camera}"
+ZOOM_MICROPHONE_CONTROL_LABEL="${ZOOM_MICROPHONE_CONTROL_LABEL:-Select a microphone}"
 
 if ! [[ "$LAUNCHER_ATTEMPTS" =~ ^[0-9]+$ ]] || [[ "$LAUNCHER_ATTEMPTS" -lt 1 ]]; then
   echo "✖ Invalid LAUNCHER_ATTEMPTS value: '$LAUNCHER_ATTEMPTS' (must be a positive integer)." >&2
@@ -77,4 +119,14 @@ fi
 sleep "$LAUNCHER_SETTLE_DELAY"
 
 # Select devices via AppleScript
-"$OSASCRIPT_BIN" scripts/select_zoom_camera.scpt
+# Pass the resolved names through as distinct argv entries (never by
+# building a command string or using eval), so osascript's "on run argv"
+# handler receives each one as exactly one argument, whitespace,
+# apostrophes, parentheses, and Unicode characters intact. Documented
+# argument order (matches select_zoom_camera.scpt's "on run argv"):
+#   1=camera name  2=microphone name  3=meeting menu label
+#   4=camera submenu label  5=microphone submenu label
+#   6=camera control label  7=microphone control label
+"$OSASCRIPT_BIN" "$SELECTOR_PATH" "$CAMERA_NAME" "$MICROPHONE_NAME" \
+  "$ZOOM_MEETING_MENU_LABEL" "$ZOOM_CAMERA_MENU_LABEL" "$ZOOM_MICROPHONE_MENU_LABEL" \
+  "$ZOOM_CAMERA_CONTROL_LABEL" "$ZOOM_MICROPHONE_CONTROL_LABEL"

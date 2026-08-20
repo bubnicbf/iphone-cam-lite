@@ -1,6 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Resolve this script's own directory from BASH_SOURCE (not the caller's
+# current working directory), so sibling resources (the AppleScript
+# selector) can always be found regardless of where or how this script is
+# invoked -- from the repo root, from another directory, by absolute path,
+# or by automation with an unrelated working directory. This is a portable
+# (dirname + cd + pwd) pattern that works on the macOS-provided Bash
+# without relying on GNU-only readlink -f/realpath.
+if ! SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; then
+  echo "✖ Could not resolve the directory containing this script." >&2
+  exit 1
+fi
+SELECTOR_PATH="$SCRIPT_DIR/select_teams_camera.scpt"
+
+# Verify the selector resource is present before doing anything else (in
+# particular, before launching the application), so a missing/misplaced
+# resource produces a clear, immediate error instead of launching Teams
+# only to fail confusingly at the AppleScript step.
+if [[ ! -f "$SELECTOR_PATH" || ! -r "$SELECTOR_PATH" ]]; then
+  echo "✖ Expected AppleScript selector not found or not readable: $SELECTOR_PATH" >&2
+  exit 1
+fi
+
 # App display name, used only with `open` and in messages -- never as a
 # process-matching pattern (see TEAMS_PROCESS_NAMES below).
 APP_NAME="Microsoft Teams"
@@ -38,6 +60,24 @@ LAUNCHER_ATTEMPTS="${LAUNCHER_ATTEMPTS:-30}"
 LAUNCHER_POLL_INTERVAL="${LAUNCHER_POLL_INTERVAL:-0.5}"
 LAUNCHER_SETTLE_DELAY="${LAUNCHER_SETTLE_DELAY:-3}"
 OSASCRIPT_BIN="${OSASCRIPT_BIN:-/usr/bin/osascript}"
+
+# Desired camera/microphone menu labels, configurable at runtime via the
+# CAMERA_NAME / MICROPHONE_NAME environment variables (":-" applies the
+# default for both "unset" and "set but empty", per the documented
+# defaults in README.md) so users are never required to edit the
+# AppleScript source files to select a differently named device.
+CAMERA_NAME="${CAMERA_NAME:-iPhone Camera}"
+MICROPHONE_NAME="${MICROPHONE_NAME:-iPhone Microphone}"
+
+# Optional UI-label overrides for localized or reorganized Teams
+# interfaces. Unset or empty values fall back to Teams' current English
+# labels, exactly as documented in README.md. These are passed through to
+# select_teams_camera.scpt as arguments 3-6 (see that file's header
+# comment for the full documented argument order).
+TEAMS_SETTINGS_MENU_LABEL="${TEAMS_SETTINGS_MENU_LABEL:-Settings}"
+TEAMS_DEVICES_LABEL="${TEAMS_DEVICES_LABEL:-Devices}"
+TEAMS_CAMERA_CONTROL_LABEL="${TEAMS_CAMERA_CONTROL_LABEL:-Camera}"
+TEAMS_MICROPHONE_CONTROL_LABEL="${TEAMS_MICROPHONE_CONTROL_LABEL:-Microphone}"
 
 if ! [[ "$LAUNCHER_ATTEMPTS" =~ ^[0-9]+$ ]] || [[ "$LAUNCHER_ATTEMPTS" -lt 1 ]]; then
   echo "✖ Invalid LAUNCHER_ATTEMPTS value: '$LAUNCHER_ATTEMPTS' (must be a positive integer)." >&2
@@ -85,4 +125,13 @@ fi
 
 sleep "$LAUNCHER_SETTLE_DELAY"
 
-"$OSASCRIPT_BIN" scripts/select_teams_camera.scpt
+# Pass the resolved names through as distinct argv entries (never by
+# building a command string or using eval), so osascript's "on run argv"
+# handler receives each one as exactly one argument, whitespace,
+# apostrophes, parentheses, and Unicode characters intact.
+# Documented argument order (matches select_teams_camera.scpt's
+# "on run argv"): 1=camera name 2=microphone name 3=settings menu label
+# 4=devices label 5=camera control label 6=microphone control label
+"$OSASCRIPT_BIN" "$SELECTOR_PATH" "$CAMERA_NAME" "$MICROPHONE_NAME" \
+  "$TEAMS_SETTINGS_MENU_LABEL" "$TEAMS_DEVICES_LABEL" \
+  "$TEAMS_CAMERA_CONTROL_LABEL" "$TEAMS_MICROPHONE_CONTROL_LABEL"
