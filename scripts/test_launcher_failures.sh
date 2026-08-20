@@ -580,16 +580,20 @@ test_resource_resolution() {
   if [[ $status -ne 0 ]]; then
     fail "[$launcher_name / spacey-cwd] expected exit 0 when the caller's directory path contains spaces, got $status (stderr: $err_content)"
   fi
-  local argc
+  local argc expected_argc
+  case "$launcher_name" in
+    Zoom) expected_argc=8 ;;    # selector, camera, mic, 5 Zoom UI-label args
+    *) expected_argc=7 ;;       # selector, camera, mic, 4 Teams UI-label args
+  esac
   argc="$(cat "$osascript_argc_log" 2>/dev/null || true)"
-  if [[ "$argc" != "3" ]]; then
-    fail "[$launcher_name / spacey-cwd] expected osascript to receive exactly 3 arguments (selector, camera name, microphone name), got argc='$argc' (a quoting bug would split or merge arguments)"
+  if [[ "$argc" != "$expected_argc" ]]; then
+    fail "[$launcher_name / spacey-cwd] expected osascript to receive exactly $expected_argc arguments (selector, camera name, microphone name, and documented UI-label overrides), got argc='$argc' (a quoting bug would split or merge arguments)"
   fi
   recorded_selector="$(head -n 1 "$osascript_args_file" 2>/dev/null || true)"
   if [[ "$recorded_selector" != "$expected_selector" ]]; then
     fail "[$launcher_name / spacey-cwd] expected osascript's first argument to be '$expected_selector', got '$recorded_selector'"
   fi
-  echo "PASS: [$launcher_name] a caller directory whose path contains spaces does not cause argument splitting; osascript still receives exactly 3 correct arguments, the first being the absolute selector path"
+  echo "PASS: [$launcher_name] a caller directory whose path contains spaces does not cause argument splitting; osascript still receives exactly $expected_argc correct arguments, the first being the absolute selector path"
 }
 
 test_resource_resolution "Zoom" "scripts/start_zoom.sh" "scripts/select_zoom_camera.scpt" "zoom.us"
@@ -751,10 +755,14 @@ test_device_name_configuration() {
     if [[ "$(count_lines "$osascript_log")" -ne 1 ]]; then
       fail "[$launcher_name / devname-$scenario_label] expected osascript to be invoked exactly once, got $(count_lines "$osascript_log")"
     fi
-    local argc
+    local argc expected_argc
+    case "$launcher_name" in
+      Zoom) expected_argc=8 ;;    # selector, camera, mic, 5 Zoom UI-label args
+      *) expected_argc=7 ;;       # selector, camera, mic, 4 Teams UI-label args
+    esac
     argc="$(cat "$osascript_argc_log" 2>/dev/null || true)"
-    if [[ "$argc" != "3" ]]; then
-      fail "[$launcher_name / devname-$scenario_label] expected osascript to receive exactly 3 arguments (selector, camera, microphone), got argc='$argc'"
+    if [[ "$argc" != "$expected_argc" ]]; then
+      fail "[$launcher_name / devname-$scenario_label] expected osascript to receive exactly $expected_argc arguments (selector, camera, microphone, and documented UI-label overrides), got argc='$argc'"
     fi
     local got_selector got_camera got_mic
     got_selector="$(sed -n '1p' "$osascript_args_file")"
@@ -770,7 +778,7 @@ test_device_name_configuration() {
     if [[ "$got_mic" != "$expected_mic" ]]; then
       fail "[$launcher_name / devname-$scenario_label] expected the microphone argument to be exactly '$expected_mic', got '$got_mic'"
     fi
-    echo "PASS: [$launcher_name] devname-$scenario_label: camera='$got_camera' microphone='$got_mic' (exactly 3 arguments, selector first)"
+    echo "PASS: [$launcher_name] devname-$scenario_label: camera='$got_camera' microphone='$got_mic' (exactly $expected_argc arguments, selector first)"
   }
 
   echo
@@ -815,11 +823,11 @@ for selector_script in "scripts/select_zoom_camera.scpt" "scripts/select_teams_c
   if ! grep -q '^on run argv' "$selector_path"; then
     fail "[static / $selector_script] expected a run handler accepting arguments (on run argv), found none"
   fi
-  if ! grep -q 'item 1 of argv' "$selector_path"; then
-    fail "[static / $selector_script] expected argument 1 (item 1 of argv) to be read as the camera name"
+  if ! grep -q 'resolveArg(argv, 1,' "$selector_path"; then
+    fail "[static / $selector_script] expected argument 1 (resolveArg(argv, 1, ...)) to be read as the camera name"
   fi
-  if ! grep -q 'item 2 of argv' "$selector_path"; then
-    fail "[static / $selector_script] expected argument 2 (item 2 of argv) to be read as the microphone name"
+  if ! grep -q 'resolveArg(argv, 2,' "$selector_path"; then
+    fail "[static / $selector_script] expected argument 2 (resolveArg(argv, 2, ...)) to be read as the microphone name"
   fi
   if ! grep -q 'property desiredCamera : "iPhone Camera"' "$selector_path"; then
     fail "[static / $selector_script] expected the default camera name property (iPhone Camera) to be retained"
@@ -827,8 +835,8 @@ for selector_script in "scripts/select_zoom_camera.scpt" "scripts/select_teams_c
   if ! grep -q 'property desiredMic : "iPhone Microphone"' "$selector_path"; then
     fail "[static / $selector_script] expected the default microphone name property (iPhone Microphone) to be retained"
   fi
-  if ! grep -q 'desiredCamera' "$selector_path" || ! grep -q 'title is desiredCamera\|itemName' "$selector_path"; then
-    fail "[static / $selector_script] expected the resolved camera name to be used in a device-selection operation"
+  if ! grep -qE '(selectDeviceFromCandidates|pickMenuItem)\([^)]*desiredCamera' "$selector_path"; then
+    fail "[static / $selector_script] expected the resolved camera name to be passed into a device-selection handler (selectDeviceFromCandidates or pickMenuItem), not just declared"
   fi
 done
 for launcher_script in "scripts/start_zoom.sh" "scripts/start_teams.sh"; do

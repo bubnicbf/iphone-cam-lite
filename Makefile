@@ -22,3 +22,4 @@ test:
 	./scripts/test_makefile.sh
 	./scripts/test_check_prereqs.sh
 	./scripts/test_launcher_failures.sh
+	./scripts/test_ui_label_configuration.sh

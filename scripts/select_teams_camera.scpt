@@ -1,87 +1,339 @@
--- Desired camera and microphone menu labels. Overridden at runtime via
--- the first two command-line arguments (camera name, then microphone
--- name) which scripts/start_teams.sh supplies from the CAMERA_NAME and
--- MICROPHONE_NAME environment variables. These property values remain
--- the defaults whenever an argument is missing or empty, so invoking
--- this script directly with osascript and no arguments still behaves
--- exactly as before.
+-- Selects the configured camera and microphone in Microsoft Teams' own UI.
+--
+-- Command-line arguments (all optional; a missing or empty argument uses
+-- the English default noted below, so `osascript select_teams_camera.scpt`
+-- with no arguments still behaves as before):
+--   1. camera name              (default: "iPhone Camera")
+--   2. microphone name          (default: "iPhone Microphone")
+--   3. settings menu label      (default: "Settings")
+--   4. devices label            (default: "Devices")
+--   5. camera control label     (default: "Camera")
+--   6. microphone control label (default: "Microphone")
+-- scripts/start_teams.sh supplies these from CAMERA_NAME, MICROPHONE_NAME,
+-- and the TEAMS_* environment variables documented in README.md.
+--
+-- Strategy: open Settings via the configured menu label, falling back to
+-- Command-comma (a layout-independent shortcut) if the menu route isn't
+-- available. Locate the Devices entry point by semantic label match
+-- against a bounded set of visible settings windows/sheets and their
+-- direct containers -- never assumed to be "window 1" or a fixed AX
+-- role -- accepting a button, row, or other selectable navigation
+-- element. Locate the camera/microphone pop-up controls the same way.
+-- Camera and microphone success are tracked independently; the script
+-- only succeeds once both are confirmed selected, and raises one
+-- actionable error identifying the failed stage otherwise.
+--
+-- Known limitation: this remains UI/accessibility scripting, not an
+-- official Teams automation API. A Teams release that removes the
+-- Settings/Devices panel entirely, moves device selection into a
+-- different surface (e.g. an in-meeting-only control), or requires an
+-- unlisted extra step is outside what label overrides alone can fix.
+
 property desiredCamera : "iPhone Camera"
 property desiredMic : "iPhone Microphone"
 property appName : "Microsoft Teams"
+property settingsMenuLabel : "Settings"
+property devicesLabel : "Devices"
+property cameraControlLabel : "Camera"
+property microphoneControlLabel : "Microphone"
+
+-- resolveArg returns argv's idx-th item if present and non-empty,
+-- otherwise defaultValue.
+on resolveArg(argv, idx, defaultValue)
+  if (count of argv) >= idx then
+    set candidateValue to item idx of argv
+    if candidateValue is not "" then return candidateValue
+  end if
+  return defaultValue
+end resolveArg
+
+-- openSettingsMenu tries the configured Settings menu label under the
+-- app's own menu-bar item. Returns true only if the click succeeded.
+on openSettingsMenu(procName, menuLabel)
+  tell application "System Events"
+    tell process procName
+      try
+        click menu item menuLabel of menu 1 of menu bar item appName of menu bar 1
+        return true
+      on error
+        return false
+      end try
+    end tell
+  end tell
+end openSettingsMenu
+
+-- openSettingsShortcut is the layout-independent Command-comma fallback.
+on openSettingsShortcut(procName)
+  tell application "System Events"
+    tell process procName
+      try
+        keystroke "," using command down
+        return true
+      on error
+        return false
+      end try
+    end tell
+  end tell
+end openSettingsShortcut
+
+-- relevantWindows: bounded to the process's currently visible windows and
+-- their sheets, never assumed to be "window 1". See
+-- select_zoom_camera.scpt for the identical rationale.
+on relevantWindows(procName)
+  set foundWindows to {}
+  tell application "System Events"
+    tell process procName
+      set allWindows to windows
+      repeat with w in allWindows
+        set end of foundWindows to w
+        try
+          set sheetList to sheets of w
+          repeat with s in sheetList
+            set end of foundWindows to s
+          end repeat
+        end try
+      end repeat
+    end tell
+  end tell
+  return foundWindows
+end relevantWindows
+
+-- boundedContainers: win itself plus its direct groups, scroll areas,
+-- tab groups, and toolbars -- a bounded set, not a full-tree walk.
+on boundedContainers(procName, win)
+  set containerList to {win}
+  tell application "System Events"
+    tell process procName
+      try
+        set containerList to containerList & (groups of win)
+      end try
+      try
+        set containerList to containerList & (scroll areas of win)
+      end try
+      try
+        set containerList to containerList & (tab groups of win)
+      end try
+      try
+        set containerList to containerList & (toolbars of win)
+      end try
+    end tell
+  end tell
+  return containerList
+end boundedContainers
+
+-- findNavigationCandidates looks for a Devices-style entry point --
+-- accepted as a button, radio button, or row whose title or description
+-- matches label -- across the given bounded containers.
+on findNavigationCandidates(procName, containerList, label)
+  set matches to {}
+  tell application "System Events"
+    tell process procName
+      repeat with c in containerList
+        try
+          repeat with b in (buttons of c)
+            try
+              if (title of b is label) or (title of b contains label) or (description of b contains label) then
+                set end of matches to b
+              end if
+            end try
+          end repeat
+        end try
+        try
+          repeat with r in (radio buttons of c)
+            try
+              if (title of r is label) or (description of r contains label) then
+                set end of matches to r
+              end if
+            end try
+          end repeat
+        end try
+        try
+          repeat with row_ in (rows of c)
+            try
+              if (title of row_ contains label) or (description of row_ contains label) then
+                set end of matches to row_
+              end if
+            end try
+          end repeat
+        end try
+      end repeat
+    end tell
+  end tell
+  return matches
+end findNavigationCandidates
+
+-- activateCandidate clicks a matched element, falling back to an
+-- explicit AXPress action for element kinds (such as static rows) that
+-- don't always respond to a plain click.
+on activateCandidate(procName, target)
+  tell application "System Events"
+    tell process procName
+      try
+        click target
+        return true
+      on error
+        try
+          perform action "AXPress" of target
+          return true
+        on error
+          return false
+        end try
+      end try
+    end tell
+  end tell
+end activateCandidate
+
+-- findControlCandidates looks for camera/microphone pop-up controls by
+-- description or title match across the given bounded containers.
+on findControlCandidates(procName, containerList, controlLabel)
+  set matches to {}
+  tell application "System Events"
+    tell process procName
+      repeat with c in containerList
+        try
+          repeat with p in (pop up buttons of c)
+            try
+              if (description of p contains controlLabel) or (title of p contains controlLabel) then
+                set end of matches to p
+              end if
+            end try
+          end repeat
+        end try
+      end repeat
+    end tell
+  end tell
+  return matches
+end findControlCandidates
+
+-- selectDeviceFromCandidates: see select_zoom_camera.scpt for the
+-- identical rationale (exactly one unambiguous candidate, explicit
+-- success/failure result, never a silent guess).
+on selectDeviceFromCandidates(procName, candidates, deviceName, controlLabel)
+  if (count of candidates) is 0 then
+    return {false, "no control found matching \"" & controlLabel & "\""}
+  end if
+  if (count of candidates) > 1 then
+    return {false, "ambiguous match: " & (count of candidates) & " controls matched \"" & controlLabel & "\""}
+  end if
+  set theControl to item 1 of candidates
+  tell application "System Events"
+    tell process procName
+      try
+        click theControl
+        delay 0.2
+        click (first menu item whose title is deviceName) of menu 1 of theControl
+        return {true, ""}
+      on error errMsg
+        return {false, "device item \"" & deviceName & "\" unavailable on the matched control (" & errMsg & ")"}
+      end try
+    end tell
+  end tell
+end selectDeviceFromCandidates
 
 on run argv
-  -- argv is data passed straight through by osascript (no shell involved
-  -- and no dynamically generated AppleScript source), so a multi-word
-  -- name, an apostrophe, parentheses, or Unicode characters arrive intact
-  -- as a single list item each.
-  if (count of argv) > 0 then
-    set candidateCamera to item 1 of argv
-    if candidateCamera is not "" then set desiredCamera to candidateCamera
-  end if
-  if (count of argv) > 1 then
-    set candidateMic to item 2 of argv
-    if candidateMic is not "" then set desiredMic to candidateMic
-  end if
+  set desiredCamera to resolveArg(argv, 1, desiredCamera)
+  set desiredMic to resolveArg(argv, 2, desiredMic)
+  set settingsMenuLabel to resolveArg(argv, 3, settingsMenuLabel)
+  set devicesLabel to resolveArg(argv, 4, devicesLabel)
+  set cameraControlLabel to resolveArg(argv, 5, cameraControlLabel)
+  set microphoneControlLabel to resolveArg(argv, 6, microphoneControlLabel)
 
   tell application "System Events"
     if not (exists application process appName) then
-      error "Teams is not running"
+      error "Teams is not running (process \"" & appName & "\" not found)."
     end if
   end tell
 
-  -- Open Settings → Devices, then pick camera/mic from popups
   tell application "System Events"
     tell process appName
       set frontmost to true
       delay 0.5
-      -- Open Settings via menu
-      try
-        click menu item "Settings" of menu 1 of menu bar item "Microsoft Teams" of menu bar 1
-      on error
-        -- Fallback: Command+comma
-        keystroke "," using command down
-      end try
-      delay 0.8
-
-      -- Click "Devices" in Settings
-      try
-        click (first UI element whose title is "Devices" and role is "AXButton") of window 1
-      on error
-        -- In some builds it's a list item
-        try
-          click (first UI element whose title is "Devices") of window 1
-        end try
-      end try
-      delay 0.5
-
-      -- Select Microphone
-      set micPicked to false
-      try
-        set micPopup to first pop up button of window 1 whose description contains "Microphone"
-        click micPopup
-        delay 0.2
-        click (first menu item whose title is desiredMic) of menu 1 of micPopup
-        set micPicked to true
-      end try
-
-      -- Select Camera
-      set camPicked to false
-      try
-        set camPopup to first pop up button of window 1 whose description contains "Camera"
-        click camPopup
-        delay 0.2
-        click (first menu item whose title is desiredCamera) of menu 1 of camPopup
-        set camPicked to true
-      end try
     end tell
   end tell
 
-  -- Report a clear, nonzero failure naming the requested device if it was
-  -- never found, instead of silently succeeding.
-  if micPicked is false then
-    error "Could not select microphone \"" & desiredMic & "\" -- check that this name matches a microphone listed in Teams' Devices settings."
+  -- Stage 1: open Settings (configured menu label, then Command-comma).
+  set settingsOpened to openSettingsMenu(appName, settingsMenuLabel)
+  if not settingsOpened then
+    set settingsOpened to openSettingsShortcut(appName)
   end if
-  if camPicked is false then
-    error "Could not select camera \"" & desiredCamera & "\" -- check that this name matches a camera listed in Teams' Devices settings."
+  if not settingsOpened then
+    error "Teams settings could not be opened (menu \"" & settingsMenuLabel & "\" and the Command-, shortcut both failed)."
   end if
+  delay 0.8
+
+  -- Stage 2: locate and activate the Devices entry point across a
+  -- bounded set of currently visible settings windows/sheets.
+  set settingsWindows to relevantWindows(appName)
+  set devicesActivated to false
+  set devicesDiagnostic to "no window exposed a control matching \"" & devicesLabel & "\""
+  repeat with w in settingsWindows
+    set containerList to boundedContainers(appName, w)
+    set navCandidates to findNavigationCandidates(appName, containerList, devicesLabel)
+    if (count of navCandidates) > 1 then
+      set devicesDiagnostic to "ambiguous match: " & (count of navCandidates) & " controls matched \"" & devicesLabel & "\""
+    else if (count of navCandidates) is 1 then
+      if activateCandidate(appName, item 1 of navCandidates) then
+        set devicesActivated to true
+        exit repeat
+      else
+        set devicesDiagnostic to "found a control matching \"" & devicesLabel & "\" but could not activate it"
+      end if
+    end if
+  end repeat
+  if not devicesActivated then
+    error "Teams Devices panel could not be located (" & devicesDiagnostic & ")."
+  end if
+  delay 0.5
+
+  -- Stage 3: select camera and microphone from a (possibly refreshed)
+  -- bounded set of visible windows/sheets, tracked independently.
+  set deviceWindows to relevantWindows(appName)
+  set camPicked to false
+  set camDiagnostic to "no control found matching \"" & cameraControlLabel & "\""
+  set micPicked to false
+  set micDiagnostic to "no control found matching \"" & microphoneControlLabel & "\""
+  repeat with w in deviceWindows
+    if not camPicked then
+      set containerList to boundedContainers(appName, w)
+      set camCandidates to findControlCandidates(appName, containerList, cameraControlLabel)
+      set camResult to selectDeviceFromCandidates(appName, camCandidates, desiredCamera, cameraControlLabel)
+      if item 1 of camResult then
+        set camPicked to true
+      else
+        set camDiagnostic to item 2 of camResult
+      end if
+    end if
+    if not micPicked then
+      set containerList to boundedContainers(appName, w)
+      set micCandidates to findControlCandidates(appName, containerList, microphoneControlLabel)
+      set micResult to selectDeviceFromCandidates(appName, micCandidates, desiredMic, microphoneControlLabel)
+      if item 1 of micResult then
+        set micPicked to true
+      else
+        set micDiagnostic to item 2 of micResult
+      end if
+    end if
+    if camPicked and micPicked then exit repeat
+  end repeat
+
+  if camPicked and micPicked then
+    return
+  end if
+
+  set failureParts to {}
+  if not camPicked then
+    set end of failureParts to "camera \"" & desiredCamera & "\" was not selected (" & camDiagnostic & ")"
+  end if
+  if not micPicked then
+    set end of failureParts to "microphone \"" & desiredMic & "\" was not selected (" & micDiagnostic & ")"
+  end if
+  set failureText to ""
+  repeat with p in failureParts
+    if failureText is "" then
+      set failureText to p
+    else
+      set failureText to failureText & "; " & p
+    end if
+  end repeat
+  error "Teams device selection failed: " & failureText
 end run

@@ -69,6 +69,16 @@ OSASCRIPT_BIN="${OSASCRIPT_BIN:-/usr/bin/osascript}"
 CAMERA_NAME="${CAMERA_NAME:-iPhone Camera}"
 MICROPHONE_NAME="${MICROPHONE_NAME:-iPhone Microphone}"
 
+# Optional UI-label overrides for localized or reorganized Teams
+# interfaces. Unset or empty values fall back to Teams' current English
+# labels, exactly as documented in README.md. These are passed through to
+# select_teams_camera.scpt as arguments 3-6 (see that file's header
+# comment for the full documented argument order).
+TEAMS_SETTINGS_MENU_LABEL="${TEAMS_SETTINGS_MENU_LABEL:-Settings}"
+TEAMS_DEVICES_LABEL="${TEAMS_DEVICES_LABEL:-Devices}"
+TEAMS_CAMERA_CONTROL_LABEL="${TEAMS_CAMERA_CONTROL_LABEL:-Camera}"
+TEAMS_MICROPHONE_CONTROL_LABEL="${TEAMS_MICROPHONE_CONTROL_LABEL:-Microphone}"
+
 if ! [[ "$LAUNCHER_ATTEMPTS" =~ ^[0-9]+$ ]] || [[ "$LAUNCHER_ATTEMPTS" -lt 1 ]]; then
   echo "✖ Invalid LAUNCHER_ATTEMPTS value: '$LAUNCHER_ATTEMPTS' (must be a positive integer)." >&2
   exit 1
@@ -119,4 +129,9 @@ sleep "$LAUNCHER_SETTLE_DELAY"
 # building a command string or using eval), so osascript's "on run argv"
 # handler receives each one as exactly one argument, whitespace,
 # apostrophes, parentheses, and Unicode characters intact.
-"$OSASCRIPT_BIN" "$SELECTOR_PATH" "$CAMERA_NAME" "$MICROPHONE_NAME"
+# Documented argument order (matches select_teams_camera.scpt's
+# "on run argv"): 1=camera name 2=microphone name 3=settings menu label
+# 4=devices label 5=camera control label 6=microphone control label
+"$OSASCRIPT_BIN" "$SELECTOR_PATH" "$CAMERA_NAME" "$MICROPHONE_NAME" \
+  "$TEAMS_SETTINGS_MENU_LABEL" "$TEAMS_DEVICES_LABEL" \
+  "$TEAMS_CAMERA_CONTROL_LABEL" "$TEAMS_MICROPHONE_CONTROL_LABEL"

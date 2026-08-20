@@ -59,6 +59,18 @@ OSASCRIPT_BIN="${OSASCRIPT_BIN:-/usr/bin/osascript}"
 CAMERA_NAME="${CAMERA_NAME:-iPhone Camera}"
 MICROPHONE_NAME="${MICROPHONE_NAME:-iPhone Microphone}"
 
+# Optional UI-label overrides for localized or reorganized Zoom
+# interfaces. Unset or empty values fall back to Zoom's current English
+# labels, exactly as documented in README.md. These are passed through to
+# select_zoom_camera.scpt as arguments 3-7 (see that file's header
+# comment for the full documented argument order); the selector uses them
+# for both its menu-based route and its accessibility fallback.
+ZOOM_MEETING_MENU_LABEL="${ZOOM_MEETING_MENU_LABEL:-Meeting}"
+ZOOM_CAMERA_MENU_LABEL="${ZOOM_CAMERA_MENU_LABEL:-Select Camera}"
+ZOOM_MICROPHONE_MENU_LABEL="${ZOOM_MICROPHONE_MENU_LABEL:-Select Microphone}"
+ZOOM_CAMERA_CONTROL_LABEL="${ZOOM_CAMERA_CONTROL_LABEL:-Select a camera}"
+ZOOM_MICROPHONE_CONTROL_LABEL="${ZOOM_MICROPHONE_CONTROL_LABEL:-Select a microphone}"
+
 if ! [[ "$LAUNCHER_ATTEMPTS" =~ ^[0-9]+$ ]] || [[ "$LAUNCHER_ATTEMPTS" -lt 1 ]]; then
   echo "✖ Invalid LAUNCHER_ATTEMPTS value: '$LAUNCHER_ATTEMPTS' (must be a positive integer)." >&2
   exit 1
@@ -110,5 +122,11 @@ sleep "$LAUNCHER_SETTLE_DELAY"
 # Pass the resolved names through as distinct argv entries (never by
 # building a command string or using eval), so osascript's "on run argv"
 # handler receives each one as exactly one argument, whitespace,
-# apostrophes, parentheses, and Unicode characters intact.
-"$OSASCRIPT_BIN" "$SELECTOR_PATH" "$CAMERA_NAME" "$MICROPHONE_NAME"
+# apostrophes, parentheses, and Unicode characters intact. Documented
+# argument order (matches select_zoom_camera.scpt's "on run argv"):
+#   1=camera name  2=microphone name  3=meeting menu label
+#   4=camera submenu label  5=microphone submenu label
+#   6=camera control label  7=microphone control label
+"$OSASCRIPT_BIN" "$SELECTOR_PATH" "$CAMERA_NAME" "$MICROPHONE_NAME" \
+  "$ZOOM_MEETING_MENU_LABEL" "$ZOOM_CAMERA_MENU_LABEL" "$ZOOM_MICROPHONE_MENU_LABEL" \
+  "$ZOOM_CAMERA_CONTROL_LABEL" "$ZOOM_MICROPHONE_CONTROL_LABEL"
