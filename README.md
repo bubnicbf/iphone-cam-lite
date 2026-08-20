@@ -23,6 +23,26 @@ make teams   # launch Teams, wait for UI, select iPhone Camera/Mic
 ```
 If the selector scripts fail the first time (apps still loading), run the command again once the meeting window is visible.
 
+## Configuring device names
+
+By default the launchers select the camera named **iPhone Camera** and the
+microphone named **iPhone Microphone** -- these must match the labels Zoom
+or Teams actually shows in its own camera/microphone menus. If your device
+is named differently (a renamed iPhone, a localized label, an external
+camera, or an external microphone), set the `CAMERA_NAME` and/or
+`MICROPHONE_NAME` environment variables at runtime -- no source file edits
+needed. Either variable can be set independently; an unset or empty
+variable falls back to its default.
+
+```bash
+CAMERA_NAME="Benjamin's iPhone Camera" make zoom
+MICROPHONE_NAME="Studio USB Mic" make teams
+CAMERA_NAME="Benjamin's iPhone Camera" MICROPHONE_NAME="Studio USB Mic" ./scripts/start_zoom.sh
+```
+
+Quote the value whenever the name contains spaces (as in the examples
+above) so the shell treats it as a single argument.
+
 ## Scripts
 
 - `scripts/check_prereqs.sh` – sanity checks for Continuity Camera.
@@ -35,7 +55,7 @@ If the selector scripts fail the first time (apps still loading), run the comman
 
 ## Notes
 
-- UI scripting depends on app menus and labels like “iPhone Camera” and “iPhone Microphone”. If you renamed your device, update the strings at the top of the AppleScript files.
+- UI scripting depends on app menus and labels like “iPhone Camera” and “iPhone Microphone”. If you renamed your device (or use an external camera/microphone), set the `CAMERA_NAME` and/or `MICROPHONE_NAME` environment variables (see “Configuring device names” above) instead of editing the AppleScript files.
 - For Zoom, camera/mic menus can be accessed from the main window or meeting window; the script tries both.
 - For Teams (new client), device settings are in Settings → Devices; the script opens that panel and selects the devices.
 

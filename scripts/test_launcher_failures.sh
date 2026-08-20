@@ -526,9 +526,9 @@ test_resource_resolution() {
     fail "[$launcher_name / outside-cwd] the caller's working directory changed from '$pwd_before' to '$pwd_after'"
   fi
   local recorded_selector
-  recorded_selector="$(cat "$osascript_args_file" 2>/dev/null || true)"
+  recorded_selector="$(head -n 1 "$osascript_args_file" 2>/dev/null || true)"
   if [[ "$recorded_selector" != "$expected_selector" ]]; then
-    fail "[$launcher_name / outside-cwd] expected osascript to receive the absolute selector path '$expected_selector', got '$recorded_selector'"
+    fail "[$launcher_name / outside-cwd] expected osascript's first argument to be the absolute selector path '$expected_selector', got '$recorded_selector'"
   fi
   case "$recorded_selector" in
     scripts/*)
@@ -582,14 +582,14 @@ test_resource_resolution() {
   fi
   local argc
   argc="$(cat "$osascript_argc_log" 2>/dev/null || true)"
-  if [[ "$argc" != "1" ]]; then
-    fail "[$launcher_name / spacey-cwd] expected osascript to receive exactly 1 argument, got argc='$argc' (a quoting bug would split or merge arguments)"
+  if [[ "$argc" != "3" ]]; then
+    fail "[$launcher_name / spacey-cwd] expected osascript to receive exactly 3 arguments (selector, camera name, microphone name), got argc='$argc' (a quoting bug would split or merge arguments)"
   fi
-  recorded_selector="$(cat "$osascript_args_file" 2>/dev/null || true)"
+  recorded_selector="$(head -n 1 "$osascript_args_file" 2>/dev/null || true)"
   if [[ "$recorded_selector" != "$expected_selector" ]]; then
-    fail "[$launcher_name / spacey-cwd] expected osascript's single argument to be '$expected_selector', got '$recorded_selector'"
+    fail "[$launcher_name / spacey-cwd] expected osascript's first argument to be '$expected_selector', got '$recorded_selector'"
   fi
-  echo "PASS: [$launcher_name] a caller directory whose path contains spaces does not cause argument splitting; osascript still receives exactly one correct absolute selector argument"
+  echo "PASS: [$launcher_name] a caller directory whose path contains spaces does not cause argument splitting; osascript still receives exactly 3 correct arguments, the first being the absolute selector path"
 }
 
 test_resource_resolution "Zoom" "scripts/start_zoom.sh" "scripts/select_zoom_camera.scpt" "zoom.us"
@@ -673,6 +673,175 @@ if echo "$teams_code_only" | grep -q 'scripts/select_teams_camera\.scpt'; then
   fail "[static / start_teams.sh] a bare caller-relative scripts/select_teams_camera.scpt reference remains in live code"
 fi
 echo "PASS: [static] both launchers resolve their script directory from BASH_SOURCE, no bare caller-relative selector path remains, and the selector invocation is quoted"
+
+echo
+echo "All launcher regression checks passed."
+# test_device_name_configuration covers the runtime CAMERA_NAME /
+# MICROPHONE_NAME configuration fix: it proves each launcher resolves the
+# documented defaults when the variables are unset or empty, passes a
+# custom value (including names with spaces, punctuation, apostrophes, and
+# Unicode characters) through to osascript as exactly one argument each,
+# and that CAMERA_NAME and MICROPHONE_NAME can be overridden independently
+# of each other.
+test_device_name_configuration() {
+  local launcher_name="$1" script_rel="$2" exact_name="$3"
+  local script_path="$repo_root/$script_rel"
+
+  run_device_name_scenario() {
+    local scenario_label="$1" camera_env="$2" camera_is_set="$3" mic_env="$4" mic_is_set="$5"
+    local expected_camera="$6" expected_mic="$7"
+    local scenario_dir open_log pgrep_log pgrep_counter sleep_log
+    local osascript_log osascript_argc_log osascript_args_file out_file err_file status
+
+    scenario_dir="$mock_dir/$(echo "$launcher_name" | tr ' ' '_')_devname_$(echo "$scenario_label" | tr ' ' '_')"
+    mkdir -p "$scenario_dir"
+    open_log="$scenario_dir/open.log"; : > "$open_log"
+    pgrep_log="$scenario_dir/pgrep.log"; : > "$pgrep_log"
+    pgrep_counter="$scenario_dir/pgrep.count"
+    sleep_log="$scenario_dir/sleep.log"; : > "$sleep_log"
+    osascript_log="$scenario_dir/osascript.log"; : > "$osascript_log"
+    osascript_argc_log="$scenario_dir/osascript_argc.log"; : > "$osascript_argc_log"
+    osascript_args_file="$scenario_dir/osascript_args.txt"
+    out_file="$scenario_dir/stdout.log"
+    err_file="$scenario_dir/stderr.log"
+
+    set +e
+    if [[ "$camera_is_set" == "1" && "$mic_is_set" == "1" ]]; then
+      CAMERA_NAME="$camera_env" MICROPHONE_NAME="$mic_env" \
+        OPEN_LOG="$open_log" OPEN_SHOULD_FAIL=0 \
+        PGREP_LOG="$pgrep_log" PGREP_MODE=exact PGREP_F_SUCCEEDS=0 \
+        PGREP_COUNTER_FILE="$pgrep_counter" PGREP_EXACT_MATCH_NAME="$exact_name" PGREP_EXACT_SUCCEED_AFTER=1 \
+        SLEEP_LOG="$sleep_log" OSASCRIPT_LOG="$osascript_log" OSASCRIPT_ARGC_LOG="$osascript_argc_log" OSASCRIPT_ARGS_FILE="$osascript_args_file" \
+        LAUNCHER_ATTEMPTS=5 LAUNCHER_POLL_INTERVAL=0 LAUNCHER_SETTLE_DELAY=0 \
+        run_launcher "$script_path" "$out_file" "$err_file"
+    elif [[ "$camera_is_set" == "1" ]]; then
+      CAMERA_NAME="$camera_env" \
+        OPEN_LOG="$open_log" OPEN_SHOULD_FAIL=0 \
+        PGREP_LOG="$pgrep_log" PGREP_MODE=exact PGREP_F_SUCCEEDS=0 \
+        PGREP_COUNTER_FILE="$pgrep_counter" PGREP_EXACT_MATCH_NAME="$exact_name" PGREP_EXACT_SUCCEED_AFTER=1 \
+        SLEEP_LOG="$sleep_log" OSASCRIPT_LOG="$osascript_log" OSASCRIPT_ARGC_LOG="$osascript_argc_log" OSASCRIPT_ARGS_FILE="$osascript_args_file" \
+        LAUNCHER_ATTEMPTS=5 LAUNCHER_POLL_INTERVAL=0 LAUNCHER_SETTLE_DELAY=0 \
+        run_launcher "$script_path" "$out_file" "$err_file"
+    elif [[ "$mic_is_set" == "1" ]]; then
+      MICROPHONE_NAME="$mic_env" \
+        OPEN_LOG="$open_log" OPEN_SHOULD_FAIL=0 \
+        PGREP_LOG="$pgrep_log" PGREP_MODE=exact PGREP_F_SUCCEEDS=0 \
+        PGREP_COUNTER_FILE="$pgrep_counter" PGREP_EXACT_MATCH_NAME="$exact_name" PGREP_EXACT_SUCCEED_AFTER=1 \
+        SLEEP_LOG="$sleep_log" OSASCRIPT_LOG="$osascript_log" OSASCRIPT_ARGC_LOG="$osascript_argc_log" OSASCRIPT_ARGS_FILE="$osascript_args_file" \
+        LAUNCHER_ATTEMPTS=5 LAUNCHER_POLL_INTERVAL=0 LAUNCHER_SETTLE_DELAY=0 \
+        run_launcher "$script_path" "$out_file" "$err_file"
+    else
+      OPEN_LOG="$open_log" OPEN_SHOULD_FAIL=0 \
+        PGREP_LOG="$pgrep_log" PGREP_MODE=exact PGREP_F_SUCCEEDS=0 \
+        PGREP_COUNTER_FILE="$pgrep_counter" PGREP_EXACT_MATCH_NAME="$exact_name" PGREP_EXACT_SUCCEED_AFTER=1 \
+        SLEEP_LOG="$sleep_log" OSASCRIPT_LOG="$osascript_log" OSASCRIPT_ARGC_LOG="$osascript_argc_log" OSASCRIPT_ARGS_FILE="$osascript_args_file" \
+        LAUNCHER_ATTEMPTS=5 LAUNCHER_POLL_INTERVAL=0 LAUNCHER_SETTLE_DELAY=0 \
+        run_launcher "$script_path" "$out_file" "$err_file"
+    fi
+    status=$?
+    set -e
+
+    out_content="$(cat "$out_file")"; err_content="$(cat "$err_file")"
+    echo "stdout: $out_content"
+    echo "stderr: $err_content"
+
+    if [[ $status -ne 0 ]]; then
+      fail "[$launcher_name / devname-$scenario_label] expected exit 0, got $status (stderr: $err_content)"
+    fi
+    if [[ "$(count_lines "$osascript_log")" -ne 1 ]]; then
+      fail "[$launcher_name / devname-$scenario_label] expected osascript to be invoked exactly once, got $(count_lines "$osascript_log")"
+    fi
+    local argc
+    argc="$(cat "$osascript_argc_log" 2>/dev/null || true)"
+    if [[ "$argc" != "3" ]]; then
+      fail "[$launcher_name / devname-$scenario_label] expected osascript to receive exactly 3 arguments (selector, camera, microphone), got argc='$argc'"
+    fi
+    local got_selector got_camera got_mic
+    got_selector="$(sed -n '1p' "$osascript_args_file")"
+    got_camera="$(sed -n '2p' "$osascript_args_file")"
+    got_mic="$(sed -n '3p' "$osascript_args_file")"
+    case "$got_selector" in
+      */select_*.scpt) : ;;
+      *) fail "[$launcher_name / devname-$scenario_label] expected argument 1 to be the selector path, got '$got_selector'" ;;
+    esac
+    if [[ "$got_camera" != "$expected_camera" ]]; then
+      fail "[$launcher_name / devname-$scenario_label] expected the camera argument to be exactly '$expected_camera', got '$got_camera'"
+    fi
+    if [[ "$got_mic" != "$expected_mic" ]]; then
+      fail "[$launcher_name / devname-$scenario_label] expected the microphone argument to be exactly '$expected_mic', got '$got_mic'"
+    fi
+    echo "PASS: [$launcher_name] devname-$scenario_label: camera='$got_camera' microphone='$got_mic' (exactly 3 arguments, selector first)"
+  }
+
+  echo
+  echo "== [$launcher_name] Scenario: default device names (CAMERA_NAME/MICROPHONE_NAME unset) =="
+  run_device_name_scenario "default" "" 0 "" 0 "iPhone Camera" "iPhone Microphone"
+
+  echo
+  echo "== [$launcher_name] Scenario: custom device names with spaces and punctuation =="
+  run_device_name_scenario "custom" "Benjamin's iPhone Camera" 1 "Studio USB Mic (Desk)" 1 \
+    "Benjamin's iPhone Camera" "Studio USB Mic (Desk)"
+
+  echo
+  echo "== [$launcher_name] Scenario: Unicode device names =="
+  run_device_name_scenario "unicode" "Bénjàmïn's Café Caméra 📷" 1 "Míc à côté (принтер)" 1 \
+    "Bénjàmïn's Café Caméra 📷" "Míc à côté (принтер)"
+
+  echo
+  echo "== [$launcher_name] Scenario: only CAMERA_NAME overridden =="
+  run_device_name_scenario "camera-only" "Conference Room Camera" 1 "" 0 \
+    "Conference Room Camera" "iPhone Microphone"
+
+  echo
+  echo "== [$launcher_name] Scenario: only MICROPHONE_NAME overridden =="
+  run_device_name_scenario "mic-only" "" 0 "Lapel Mic" 1 \
+    "iPhone Camera" "Lapel Mic"
+
+  echo
+  echo "== [$launcher_name] Scenario: both variables set to an empty string fall back to defaults =="
+  run_device_name_scenario "empty" "" 1 "" 1 "iPhone Camera" "iPhone Microphone"
+
+  unset -f run_device_name_scenario
+}
+
+test_device_name_configuration "Zoom" "scripts/start_zoom.sh" "zoom.us"
+test_device_name_configuration "Microsoft Teams" "scripts/start_teams.sh" "MSTeams"
+
+# --- Static assertions: selectors accept configurable device names -------
+echo
+echo "== Static checks: selectors accept configurable camera/microphone names =="
+for selector_script in "scripts/select_zoom_camera.scpt" "scripts/select_teams_camera.scpt"; do
+  selector_path="$repo_root/$selector_script"
+  if ! grep -q '^on run argv' "$selector_path"; then
+    fail "[static / $selector_script] expected a run handler accepting arguments (on run argv), found none"
+  fi
+  if ! grep -q 'item 1 of argv' "$selector_path"; then
+    fail "[static / $selector_script] expected argument 1 (item 1 of argv) to be read as the camera name"
+  fi
+  if ! grep -q 'item 2 of argv' "$selector_path"; then
+    fail "[static / $selector_script] expected argument 2 (item 2 of argv) to be read as the microphone name"
+  fi
+  if ! grep -q 'property desiredCamera : "iPhone Camera"' "$selector_path"; then
+    fail "[static / $selector_script] expected the default camera name property (iPhone Camera) to be retained"
+  fi
+  if ! grep -q 'property desiredMic : "iPhone Microphone"' "$selector_path"; then
+    fail "[static / $selector_script] expected the default microphone name property (iPhone Microphone) to be retained"
+  fi
+  if ! grep -q 'desiredCamera' "$selector_path" || ! grep -q 'title is desiredCamera\|itemName' "$selector_path"; then
+    fail "[static / $selector_script] expected the resolved camera name to be used in a device-selection operation"
+  fi
+done
+for launcher_script in "scripts/start_zoom.sh" "scripts/start_teams.sh"; do
+  launcher_path="$repo_root/$launcher_script"
+  if ! grep -q '"\$OSASCRIPT_BIN" "\$SELECTOR_PATH" "\$CAMERA_NAME" "\$MICROPHONE_NAME"' "$launcher_path"; then
+    fail "[static / $launcher_script] expected osascript to be invoked with the selector path plus the two resolved device names"
+  fi
+  launcher_code_only="$(grep -v -E '^[[:space:]]*#' "$launcher_path")"
+  if echo "$launcher_code_only" | grep -qw 'eval'; then
+    fail "[static / $launcher_script] must not use eval"
+  fi
+done
+echo "PASS: [static] both selectors define an argument-accepting run handler, read the camera/microphone names in the documented order, retain their default properties, and both launchers pass the two resolved names as distinct osascript arguments without eval"
 
 echo
 echo "All launcher regression checks passed."

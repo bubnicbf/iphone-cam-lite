@@ -61,6 +61,14 @@ LAUNCHER_POLL_INTERVAL="${LAUNCHER_POLL_INTERVAL:-0.5}"
 LAUNCHER_SETTLE_DELAY="${LAUNCHER_SETTLE_DELAY:-3}"
 OSASCRIPT_BIN="${OSASCRIPT_BIN:-/usr/bin/osascript}"
 
+# Desired camera/microphone menu labels, configurable at runtime via the
+# CAMERA_NAME / MICROPHONE_NAME environment variables (":-" applies the
+# default for both "unset" and "set but empty", per the documented
+# defaults in README.md) so users are never required to edit the
+# AppleScript source files to select a differently named device.
+CAMERA_NAME="${CAMERA_NAME:-iPhone Camera}"
+MICROPHONE_NAME="${MICROPHONE_NAME:-iPhone Microphone}"
+
 if ! [[ "$LAUNCHER_ATTEMPTS" =~ ^[0-9]+$ ]] || [[ "$LAUNCHER_ATTEMPTS" -lt 1 ]]; then
   echo "✖ Invalid LAUNCHER_ATTEMPTS value: '$LAUNCHER_ATTEMPTS' (must be a positive integer)." >&2
   exit 1
@@ -107,4 +115,8 @@ fi
 
 sleep "$LAUNCHER_SETTLE_DELAY"
 
-"$OSASCRIPT_BIN" "$SELECTOR_PATH"
+# Pass the resolved names through as distinct argv entries (never by
+# building a command string or using eval), so osascript's "on run argv"
+# handler receives each one as exactly one argument, whitespace,
+# apostrophes, parentheses, and Unicode characters intact.
+"$OSASCRIPT_BIN" "$SELECTOR_PATH" "$CAMERA_NAME" "$MICROPHONE_NAME"
