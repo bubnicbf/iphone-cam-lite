@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test, lint, and package (macOS)
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Run automated test suite
+        run: make test
+
+      - name: Run lint (bash -n + osacompile)
+        run: make lint
+
+      - name: Build a synthetic-version release package
+        run: make dist VERSION=0.0.0-ci
+
+      - name: Verify release package checksums
+        run: |
+          cd dist
+          shasum -a 256 -c iphone-cam-lite-0.0.0-ci-SHA256SUMS.txt
+
+      - name: Clean up local release artifacts
+        if: always()
+        run: make clean-dist

@@ -144,3 +144,31 @@ use its Title or Description field as the override value.
 	- The app isn't exposing the accessibility attribute this confirmation relies on (for example a menu item's mark character, or a control's value/title) for that control right now -- this can happen after an app update changes what it exposes, or if the relevant window/menu isn't in the expected state. Re-run after bringing the app's window to the front, and check whether a newer version of this repository has an updated confirmation strategy for the installed app version.
 - If the error mentions a confirmation timeout:
 	- The bounded wait (a few seconds, briefly polling) elapsed before the app's accessibility state confirmed the change -- this is deliberate and never indefinite. A consistently slow app, an unusually large device list, or a partially unresponsive UI can all cause this; re-running after the app has fully finished loading its window usually resolves it.
+
+## Testing
+
+```sh
+make test
+```
+
+Runs the full regression suite (`tests/run.sh`, which discovers and runs every `scripts/test_*.sh` file). The suite is entirely mocked: it never launches Zoom or Teams, never changes your actual camera/microphone selection, and never restarts real system services.
+
+```sh
+make lint
+```
+
+Runs `bash -n` over every shell script, and (on macOS with the Xcode Command Line Tools installed) compiles each `.scpt` file with `osacompile` to confirm it's syntactically valid AppleScript.
+
+## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to set up a development environment, the branching model, and what's expected of a pull request.
+
+## Releases
+
+```sh
+make dist VERSION=1.2.3
+```
+
+Builds a release into `dist/` (git-ignored): `iphone-cam-lite-1.2.3.tar.gz`, `iphone-cam-lite-1.2.3.zip`, and a `iphone-cam-lite-1.2.3-SHA256SUMS.txt` checksum file covering both, each containing a single top-level `iphone-cam-lite-1.2.3/` directory with only the runtime files (no tests, no development tooling). Run `make clean-dist` to remove `dist/`.
+
+See [CHANGELOG.md](CHANGELOG.md) for release history, and [SECURITY.md](SECURITY.md) for how to report a vulnerability.
