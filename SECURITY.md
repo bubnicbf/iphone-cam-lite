@@ -2,10 +2,10 @@
 
 ## Supported Versions
 
-iphone-cam-lite is a small personal-use automation toolkit, packaged as a
-handful of shell scripts and AppleScript files rather than a service with a
-long-term support cycle. In practice, security fixes are made against the
-latest released version:
+iphone-cam-lite is a small personal-use automation tool — now a native
+macOS Swift menu bar app rather than a service with a long-term support
+cycle. In practice, security fixes are made against the latest released
+version:
 
 | Version | Supported          |
 | ------- | ------------------ |
@@ -15,7 +15,9 @@ latest released version:
 
 Earlier tagged versions are not maintained. If you're running an older
 version, please upgrade to the latest release (or the `dev` branch) before
-reporting an issue, in case it has already been fixed.
+reporting an issue, in case it has already been fixed. See
+[CHANGELOG.md](CHANGELOG.md) for what changed in the unreleased native
+Swift rewrite.
 
 ## Reporting a Vulnerability
 
@@ -34,7 +36,7 @@ When reporting, please include:
 - The platform and macOS version.
 - Steps to reproduce, and what you expected vs. what happened.
 
-Before attaching logs, screenshots, or AppleScript output, please redact
+Before attaching logs, screenshots, or automation output, please redact
 anything sensitive that isn't relevant to the report -- for example
 Microsoft/Zoom account details or sign-in state, meeting IDs or links,
 calendar or contact information visible in a screenshot, and personal

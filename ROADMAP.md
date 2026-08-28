@@ -1,68 +1,82 @@
 # iPhone Cam Lite — Roadmap
 
-A high-level plan for growing the project from shell scripts -> Swift CLI -> menu bar app -> ecosystem tooling.
+A high-level plan for growing the project from a shell/AppleScript
+toolkit -> native Swift menu bar app -> ecosystem tooling.
 
 ---
 
-## Current (v0.2.0 — Hardening & Reliability)
-**Goal:** Make the AppleScript + shell approach stable for daily use.
+## Done (v0.3.0 — Native Swift Menu Bar App)
+**Goal:** Replace the shell-script-and-AppleScript toolkit with a native,
+modular macOS app.
 
-- [ ] **Robust device selection**
-  - Retry/backoff if Zoom/Teams UI not ready
-  - Fail gracefully with clear error messages
-- [ ] **Configurable device names**
-  - Store `camera_name` and `mic_name` in `config/devices.yml`
-- [ ] **Structured logging**
-  - Write logs to `logs/{zoom,teams}.log`
-  - Add `make logs` target
-- [ ] **Tooling improvements**
-  - GitHub Actions CI: run `shellcheck`, `osacompile`, and `markdownlint`
-  - Makefile targets: `zoom`, `teams`, `reset-camera`, `logs`, `check`
-- [ ] **Documentation**
-  - Add `docs/TROUBLESHOOTING.md` with privacy/permissions setup
-- [ ] **Optional LaunchAgent**
-  - Auto-select iPhone Camera/Mic whenever Zoom or Teams launches
+- [x] **Native menu bar app** — `MenuBarExtra` UI with live selection
+  status, one-click Zoom/Teams device selection, and a keep-awake toggle
+  (`App/MenuBar`).
+- [x] **Onboarding** — explains and checks Accessibility/Apple Events
+  permissions without ever claiming a false grant (`App/Onboarding`).
+- [x] **Diagnostics** — read-only prerequisite checks (Wi-Fi, Bluetooth,
+  macOS version, installed apps, permissions) plus a manual
+  camera-service-reset action (`App/Diagnostics`, `Packages/SystemChecks`).
+- [x] **Typed, persisted Settings** — device names and menu/control label
+  overrides, replacing environment-variable configuration
+  (`App/Settings`).
+- [x] **`CameraCore` domain layer** — pure Swift package with a typed
+  `SelectionError` taxonomy (launch failure, startup timeout,
+  process-never-appeared, settings UI unopenable, control not found,
+  ambiguous match, action failed, value unchanged, wrong device selected,
+  state unreadable, confirmation timeout, partial selection) so failure
+  distinctions the old scripts made in prose are now compiler-checked
+  types.
+- [x] **`AppAutomation` adapters** — Zoom and Teams device selection
+  behind injectable protocols, preserving exact process-name matching,
+  independent camera/mic selection, and positive read-back confirmation;
+  the existing hardened AppleScript files are kept as a documented
+  transitional bridge rather than rewritten from scratch (see
+  `docs/ARCHITECTURE.md`).
+- [x] **Hermetic test suite** — `CameraCoreTests`, `AdapterFixtureTests`,
+  `UITests` running via `swift test`, with no real app launches, service
+  restarts, or network dependency (see `docs/TESTING.md`).
+- [x] **CI on SwiftPM** — `.github/workflows/ci.yml` builds and tests the
+  native app on macOS runners; `.github/workflows/release.yml` packages
+  the native `.app` instead of archiving shell scripts.
+- [x] **Migration docs** — `docs/ARCHITECTURE.md`, `docs/MIGRATION.md`
+  mapping every retired script to its native replacement.
 
----
-
-## Next (v0.3.0 — Swift CLI)
-**Goal:** Replace fragile UI scripting with a small native tool.
-
-- [ ] **Swift CLI (`icl`)**
-  - Command: `icl select --app zoom|teams --camera ... --mic ...`
-  - Faster, more reliable than AppleScript UI scripting
-- [ ] **System doctor command**
-  - `icl doctor` verifies Accessibility, Wi-Fi, Bluetooth, Handoff
-  - Prints actionable fixes if checks fail
-- [ ] **Binary distribution**
-  - Universal macOS build attached to GitHub Releases
-  - Draft Homebrew tap formula for testing
-- [ ] **Profiles**
-  - Config files in `profiles/`
-  - Example: `icl select --profile default`
-
----
-
-## Future (v0.4.0 — Menu Bar App)
-**Goal:** Provide a simple, visible UX for camera/mic control.
-
-- [ ] **Menubar status indicator**
-  - Show “Using iPhone Camera ✅/❌”
-  - Display current mic selection
-- [ ] **Quick actions**
-  - One-click switch to iPhone camera/mic
-  - Show success/failure as a toast/notification
-- [ ] **On-join automation**
-  - Option to auto-select iPhone Camera/Mic when a meeting window opens
+See [docs/MIGRATION.md](docs/MIGRATION.md) for the full script-by-script
+mapping and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the module
+design and known limitations (the AppleScript bridge is transitional; the
+app is unsigned/not notarized for this release; there is no true
+`XCUIApplication` UI-automation coverage yet).
 
 ---
 
-## Later (v0.5.0 — Ecosystem & Packaging)
+## Next (v0.4.0 — Native Accessibility Automation)
+**Goal:** Retire the transitional AppleScript bridge in favor of a
+pure-Swift Accessibility (AXUIElement) implementation.
+
+- [ ] **Pure-Swift device-selection adapter**
+  - Reuse the already-built-and-tested `Confirmation`/`ApplicationReadiness`
+    primitives in `CameraCore` (currently exercised by tests but not yet
+    wired into production adapters)
+  - Replace `osascript` invocation of `select_zoom_camera.scpt` /
+    `select_teams_camera.scpt` with direct `AXUIElement` calls
+  - Keep the same `SelectionError` taxonomy and confirmation guarantees
+- [ ] **`XCUIApplication` UI automation**
+  - Real end-to-end UI tests replacing the `if: false`-gated
+    `ui-automation-smoke` CI job stub
+- [ ] **Automated packaging regression test**
+  - Cover `scripts/package_app.sh` with an automated check rather than
+    manual verification
+- [ ] **Signing and notarization**
+  - Distribute a signed, notarized build to avoid Gatekeeper prompts
+
+---
+
+## Future (v0.5.0 — Ecosystem & Packaging)
 **Goal:** Expand reach, simplify installs, and support more apps.
 
 - [ ] **Packaging**
   - Publish official Homebrew formula
-  - (Optional) Sign and notarize build to avoid Gatekeeper prompts
 - [ ] **More app support**
   - Google Meet (browser-based settings automation)
   - Webex (device selection parity with Zoom/Teams)
