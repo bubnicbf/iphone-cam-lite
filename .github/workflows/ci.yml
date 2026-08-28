@@ -14,27 +14,99 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Test, lint, and package (macOS)
+  build-and-test:
+    name: Build & test native app (macOS)
     runs-on: macos-14
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      - name: Run automated test suite
-        run: make test
+      - name: Report toolchain versions
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
 
-      - name: Run lint (bash -n + osacompile)
+      - name: Resolve package graph
+        run: swift package resolve
+
+      - name: Build all targets (debug)
+        run: swift build
+
+      - name: Build the app (release, for packaging later)
+        run: swift build -c release --product IPhoneCamLite
+
+      - name: Run CameraCoreTests
+        run: swift test --filter CameraCoreTests --enable-code-coverage
+
+      - name: Run AdapterFixtureTests
+        run: swift test --filter AdapterFixtureTests --enable-code-coverage
+
+      - name: Run UITests (app-owned view-model/flow tests, no live UI automation)
+        run: swift test --filter UITests
+
+      - name: Confirm tests were actually discovered
+        run: |
+          total=$(swift test --list-tests 2>/dev/null | grep -c '/' || true)
+          echo "Discovered $total test(s)."
+          if [ "$total" -eq 0 ]; then
+            echo "::error::No tests were discovered -- failing rather than silently passing." >&2
+            exit 1
+          fi
+
+      - name: Validate PrivacyInfo.xcprivacy
+        run: plutil -lint Resources/PrivacyInfo.xcprivacy
+
+      - name: Lint (swift-format, if available)
         run: make lint
 
-      - name: Build a synthetic-version release package
+      - name: Package a synthetic-version release
         run: make dist VERSION=0.0.0-ci
 
       - name: Verify release package checksums
         run: |
           cd dist
-          shasum -a 256 -c iphone-cam-lite-0.0.0-ci-SHA256SUMS.txt
+          shasum -a 256 -c IPhoneCamLite-0.0.0-ci-SHA256SUMS.txt
+
+      - name: Confirm the built app bundle contains required resources
+        run: |
+          app="dist_extracted/IPhoneCamLite.app"
+          rm -rf dist_extracted && mkdir -p dist_extracted
+          unzip -q dist/IPhoneCamLite-0.0.0-ci.zip -d dist_extracted
+          test -f "$app/Contents/Info.plist"
+          test -f "$app/Contents/Resources/PrivacyInfo.xcprivacy"
+          test -x "$app/Contents/MacOS/IPhoneCamLite"
+          echo "App bundle contains Info.plist, PrivacyInfo.xcprivacy, and the executable."
+
+      - name: Search for stale references to removed scripts
+        run: |
+          if grep -RIl --exclude-dir=.git --exclude-dir=.build \
+            -e 'start_zoom\.sh' -e 'start_teams\.sh' -e 'check_prereqs\.sh' \
+            -e 'reset_camera_services\.sh' -e 'keepawake\.sh' -e 'tests/run\.sh' \
+            . | grep -v -E '(docs/MIGRATION\.md|CHANGELOG\.md)'; then
+            echo "::error::Found stale references to removed scripts outside the migration/changelog docs." >&2
+            exit 1
+          fi
+          echo "No stale references to removed scripts."
 
       - name: Clean up local release artifacts
         if: always()
-        run: make clean-dist
+        run: |
+          make clean-dist
+          rm -rf dist_extracted
+
+  ui-automation-smoke:
+    name: Live UI automation (not yet implemented)
+    runs-on: macos-14
+    if: false
+    steps:
+      - name: Explanation
+        run: |
+          echo "True XCUIApplication-driven UI automation of the menu bar app"
+          echo "requires a full Xcode project/scheme with a UI test target and a"
+          echo "logged-in GUI session with Accessibility permission granted to the"
+          echo "test runner -- not reliably available on a hosted macOS runner for"
+          echo "a SwiftPM-only build. Tracked as follow-up work; see"
+          echo "docs/TESTING.md. UITests in this repository are XCTest-based"
+          echo "view-model/flow tests, not XCUIApplication automation, and already"
+          echo "run in the job above."
